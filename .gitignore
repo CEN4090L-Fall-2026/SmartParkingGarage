@@ -1,0 +1,22 @@
+# Unity generated files
+Library/
+Temp/
+Obj/
+Logs/
+UserSettings/
+MemoryCaptures/
+Build/
+Builds/
+
+# Unity and local tooling
+.plastic/
+.omp/
+ignore.conf
+
+# Python backend generated files
+**/.venv/
+**/__pycache__/
+**/.pytest_cache/
+**/.ruff_cache/
+**/.mypy_cache/
+*.py[cod]

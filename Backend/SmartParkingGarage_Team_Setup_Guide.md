@@ -1,5 +1,9 @@
 # Smart Parking Garage — Team Setup Guide
 
+Backend setup and ownership are documented in [README.md](README.md). The Unity onboarding sections below describe
+the original cs:2 baseline; use the numbered handoff documents for the later simulation status. Joshua works only
+in this sibling backend workspace and does not modify the Unity workspace.
+
 ## Project Overview
 
 **Project:** Smart Parking Garage Management and Guidance System  
@@ -40,16 +44,16 @@ The 3D garage in Unity is the simulation environment used to test the software. 
 - **Unity / C#** — 3D simulation, garage behavior, cameras, vehicle movement, parking-space visualization
 - **Blender** — source environment/artwork
 - **Python + FastAPI** — backend/API
-- **PostgreSQL** — parking, vehicle, reservation, session, and historical data
+- **PostgreSQL** — planned persistence; the current backend stores its projection and commands in memory
 - **React + TypeScript** — operator dashboard and possibly the driver-facing interface
-- **REST / WebSockets** — communication between Unity, backend, and web interfaces
+- **REST polling** — current Unity/backend communication; WebSockets are not implemented
 
 ### Repository boundaries
 
 - Unity source stays in the UVCS workspace described below.
-- Backend source is in the separate sibling folder `SmartParkingGarage-Backend/`; its Python project is under `backend/` and PostgreSQL Compose configuration is under `infra/`.
+- Backend source is under `Backend/` in the team GitHub checkout, with `app/`, `tests/`, and `pyproject.toml` at the backend root. Run it with `uv`; PostgreSQL and Compose are not required for the current baseline.
 - The backend folder is outside the Unity workspace. Do not create a Git repository inside the Unity workspace or copy backend files back into it.
-- The GitHub remote for the backend has not been created yet.
+- The canonical GitHub repository is <https://github.com/CEN4090L-Fall-2026/SmartParkingGarage>; keep its checkout separate from the Unity workspace.
 
 
 The Unity project already contains the HDRP baseline, imported garage, main scene, organized floor hierarchy, colliders, materials, and starter C# manager classes. The current shared baseline is **changeset `cs:2` on `/main`**.

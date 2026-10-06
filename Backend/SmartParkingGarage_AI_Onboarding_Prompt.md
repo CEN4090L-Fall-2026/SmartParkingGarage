@@ -1,5 +1,9 @@
 # Smart Parking Garage — AI Onboarding Prompt
 
+For current backend setup and ownership, use [README.md](README.md). The Unity onboarding sections below describe
+the original cs:2 baseline; the numbered handoffs describe the later simulation. Joshua's changes are confined to
+this sibling backend workspace. Treat all Unity files, including its backend copy, as read-only references.
+
 You are helping a member of a four-person FSU Computer Science capstone team join and work on an existing shared Unity project.
 
 Your job is to understand the project, help this teammate set up the correct local Unity/Version Control/AI environment, and then assist them with project work without damaging the shared repository.
@@ -57,7 +61,7 @@ Representative flow:
 ```text
 Driver enters garage
 → parking session begins
-→ backend assigns a space
+→ backend queues the request; Unity assigns a space
 → Unity/driver UI guides vehicle to it
 → vehicle parks
 → stall state changes AVAILABLE → OCCUPIED
@@ -76,16 +80,16 @@ Current intended stack:
 - **Unity + C#** — 3D simulation, garage systems, vehicles, cameras, parking visualization
 - **Blender** — source architecture/environment artwork
 - **Python + FastAPI** — backend/API
-- **PostgreSQL** — parking spaces, vehicles, reservations, sessions, history
+- **PostgreSQL** — planned persistence; current state and commands are in memory
 - **React + TypeScript** — operator dashboard and potentially driver interface
-- **REST/WebSockets** — Unity/backend/web communication
+- **REST polling** — current Unity/backend transport; WebSockets are not implemented
 
 ## Repository boundaries
 
 - Unity source remains in the UVCS workspace.
-- Backend source is in the separate sibling folder `SmartParkingGarage-Backend/`; the Python project is under `backend/` and PostgreSQL Compose configuration is under `infra/`.
+- Backend source is under `Backend/` in the team GitHub checkout, with `app/`, `tests/`, and `pyproject.toml` at the backend root. Use `uv` and the commands in README.md; no PostgreSQL or Compose setup is needed for this baseline.
 - Keep the backend outside the Unity workspace. Never initialize Git inside the Unity workspace or copy backend files back under it.
-- The backend GitHub remote is not created yet.
+- The canonical GitHub repository is <https://github.com/CEN4090L-Fall-2026/SmartParkingGarage>; keep its checkout separate from the Unity workspace.
 
 
 Possible later algorithms/features:

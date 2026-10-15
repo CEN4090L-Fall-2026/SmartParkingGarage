@@ -7,7 +7,7 @@ reports (plus its own spawn-request records) and serves it to clients.
 
 import threading
 
-from ..models import (
+from smart_parking_backend.models import (
     DataSource,
     GarageSummary,
     Level,
@@ -26,7 +26,11 @@ from ..models import (
     VehicleRequestType,
     VehicleSpawnRequest,
 )
-from .seed_data import EV_SPACE_IDS, OUT_OF_SERVICE_SPACE_IDS, SPACE_NUMBERS_BY_LEVEL
+from smart_parking_backend.services.seed_data import (
+    EV_SPACE_IDS,
+    OUT_OF_SERVICE_SPACE_IDS,
+    SPACE_NUMBERS_BY_LEVEL,
+)
 
 
 class NotFoundError(Exception):
@@ -211,6 +215,8 @@ class GarageStateService:
         request_type: VehicleRequestType,
         preferred_level: Level | None,
         command_id: str | None = None,
+        *,
+        auto_depart: bool = True,
     ) -> VehicleSpawnRequest:
         with self._lock:
             self._request_sequence += 1
@@ -218,6 +224,7 @@ class GarageStateService:
                 request_id=f"REQ_{self._request_sequence:04d}",
                 request_type=request_type,
                 preferred_level=preferred_level,
+                auto_depart=auto_depart,
                 command_id=command_id,
             )
             self._spawn_requests[request.request_id] = request

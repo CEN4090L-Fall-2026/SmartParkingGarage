@@ -2,7 +2,8 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Query
 
-from ...models import (
+from smart_parking_backend.api.deps import get_integration
+from smart_parking_backend.models import (
     BackendCommand,
     CommandAckRequest,
     CommandAckResponse,
@@ -11,8 +12,7 @@ from ...models import (
     SnapshotAck,
     UnityStateSnapshot,
 )
-from ...services.integration import IntegrationService
-from ..deps import get_integration
+from smart_parking_backend.services.integration import IntegrationService
 
 router = APIRouter(prefix="/api/integration", tags=["integration"])
 

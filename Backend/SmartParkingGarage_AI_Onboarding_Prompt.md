@@ -87,7 +87,7 @@ Current intended stack:
 ## Repository boundaries
 
 - Unity source remains in the UVCS workspace.
-- Backend source is under `Backend/` in the team GitHub checkout, with `app/`, `tests/`, and `pyproject.toml` at the backend root. Use `uv` and the commands in README.md; no PostgreSQL or Compose setup is needed for this baseline.
+- Backend source is under `Backend/` in the team GitHub checkout, with `src/smart_parking_backend/`, `tests/`, and `pyproject.toml` at the backend root. Use `uv` and the commands in README.md; no PostgreSQL or Compose setup is needed for this baseline.
 - Keep the backend outside the Unity workspace. Never initialize Git inside the Unity workspace or copy backend files back under it.
 - The canonical GitHub repository is <https://github.com/CEN4090L-Fall-2026/SmartParkingGarage>; keep its checkout separate from the Unity workspace.
 

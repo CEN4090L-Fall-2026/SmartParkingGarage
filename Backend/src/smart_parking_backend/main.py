@@ -2,11 +2,20 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from . import __version__
-from .api.routes import garage, health, simulation, spaces, vehicles
-from .api.routes import integration as integration_routes
-from .services.garage_state import GarageStateService, NotFoundError
-from .services.integration import (
+from smart_parking_backend import __version__
+from smart_parking_backend.api.routes import (
+    garage,
+    health,
+    simulation,
+    spaces,
+    vehicles,
+)
+from smart_parking_backend.api.routes import integration as integration_routes
+from smart_parking_backend.services.garage_state import (
+    GarageStateService,
+    NotFoundError,
+)
+from smart_parking_backend.services.integration import (
     IntegrationService,
     SessionMismatchError,
     StaleSnapshotError,

@@ -2,10 +2,10 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Response
 
-from ...models import GarageSummary
-from ...services.garage_state import GarageStateService
-from ...services.integration import IntegrationService
-from ..deps import get_integration, get_service, tag_data_source
+from smart_parking_backend.api.deps import get_integration, get_service, tag_data_source
+from smart_parking_backend.models import GarageSummary
+from smart_parking_backend.services.garage_state import GarageStateService
+from smart_parking_backend.services.integration import IntegrationService
 
 router = APIRouter(prefix="/api/garage", tags=["garage"])
 

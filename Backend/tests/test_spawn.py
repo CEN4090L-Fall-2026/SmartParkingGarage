@@ -1,8 +1,23 @@
+import pytest
+
 from .conftest import EV_IDS
 
 
 def spawn(client, body):
     return client.post("/api/vehicles/spawn", json=body)
+
+
+def test_spawn_request_defaults_auto_depart_and_preserves_explicit_false(client, unity):
+    defaulted = spawn(client, {"request_type": "Standard"})
+    explicit = spawn(client, {"request_type": "EV", "auto_depart": False})
+
+    assert defaulted.status_code == 202
+    assert explicit.status_code == 202
+    assert defaulted.json()["request"]["auto_depart"] is True
+    assert explicit.json()["request"]["auto_depart"] is False
+    commands = unity.poll()
+    assert commands[0]["payload"]["auto_depart"] is True
+    assert commands[1]["payload"]["auto_depart"] is False
 
 
 def test_standard_and_ev_spawn_outcomes_are_truthful(client, unity):
@@ -109,3 +124,43 @@ def test_offline_spawn_is_not_recorded(client):
     response = spawn(client, {"request_type": "EV"})
     assert response.status_code == 503 and response.json()["success"] is False
     assert client.get("/api/vehicles/spawn-requests").json() == []
+
+
+@pytest.mark.parametrize(
+    "error_code",
+    ["GarageFull", "LevelFull", "VehicleLimitReached", "EntranceBlocked"],
+)
+def test_spawn_failure_error_code_is_preserved_and_first_result_wins(
+    client, unity, error_code
+):
+    accepted = spawn(client, {"request_type": "Standard"})
+    request_id = accepted.json()["request"]["request_id"]
+    command_id = accepted.json()["command"]["command_id"]
+    assert [command["command_id"] for command in unity.poll()] == [command_id]
+
+    first = unity.ack(
+        command_id,
+        False,
+        "The request could not be completed.",
+        error_code=error_code,
+    )
+    assert first.status_code == 200
+    command = client.get(f"/api/integration/commands/{command_id}").json()
+    request = client.get(f"/api/vehicles/spawn-requests/{request_id}").json()
+    assert command["status"] == "Failed"
+    assert command["error_code"] == error_code
+    assert request["status"] == "Failed"
+    assert request["error_code"] == error_code
+    assert client.get("/api/vehicles").json() == []
+
+    duplicate = unity.ack(
+        command_id,
+        False,
+        "A different failure.",
+        error_code="GarageFull",
+    )
+    assert duplicate.status_code == 200
+    assert duplicate.json()["duplicate"] is True
+    command = client.get(f"/api/integration/commands/{command_id}").json()
+    assert command["error_code"] == error_code
+    assert command["result_message"] == "The request could not be completed."

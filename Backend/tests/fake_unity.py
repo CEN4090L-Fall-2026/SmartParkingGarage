@@ -58,7 +58,7 @@ class FakeUnity:
         assert response.status_code == 200, response.text
         return response.json()["commands"]
 
-    def ack(self, command_id, success, message="", vehicle_id=None):
+    def ack(self, command_id, success, message="", vehicle_id=None, error_code=None):
         return self.client.post(
             f"/api/integration/commands/{command_id}/ack",
             json={
@@ -66,6 +66,7 @@ class FakeUnity:
                 "success": success,
                 "message": message,
                 "vehicle_id": vehicle_id,
+                "error_code": error_code,
             },
         )
 

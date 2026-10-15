@@ -2,7 +2,8 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Response, status
 
-from ...models import (
+from smart_parking_backend.api.deps import get_integration, get_service, tag_data_source
+from smart_parking_backend.models import (
     CommandAccepted,
     CommandPayload,
     SpawnVehicleCommand,
@@ -10,9 +11,8 @@ from ...models import (
     VehicleLifecycleState,
     VehicleSpawnRequest,
 )
-from ...services.garage_state import GarageStateService
-from ...services.integration import IntegrationService
-from ..deps import get_integration, get_service, tag_data_source
+from smart_parking_backend.services.garage_state import GarageStateService
+from smart_parking_backend.services.integration import IntegrationService
 
 router = APIRouter(prefix="/api/vehicles", tags=["vehicles"])
 
@@ -47,7 +47,9 @@ def request_spawn(
     state = service.last_known_state()
     queued, request = integration.enqueue_spawn(
         CommandPayload(
-            request_type=command.request_type, preferred_level=command.preferred_level
+            request_type=command.request_type,
+            preferred_level=command.preferred_level,
+            auto_depart=command.auto_depart,
         )
     )
     return CommandAccepted(

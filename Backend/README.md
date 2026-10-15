@@ -21,10 +21,10 @@ From this repository's `Backend/` directory (Python 3.11+ and uv installed):
 
 ```bash
 uv sync
-uv run uvicorn app.main:app --host 127.0.0.1 --port 8000
+uv run uvicorn smart_parking_backend.main:app --host 127.0.0.1 --port 8000
 uv run pytest -q
-uv run ruff format --check app tests
-uv run ruff check app tests
+uv run ruff format --check src tests
+uv run ruff check src tests
 ```
 
 Run one server process: snapshots and command queues are process-local. PostgreSQL, Docker, and a `.env` file are
@@ -99,7 +99,7 @@ CORS allows only `http://localhost:3000`, `http://localhost:5173`, `http://127.0
 
 ## Stall inventory
 
-`app/services/seed_data.py` holds the exact stall IDs (from the Unity garage prefab and `MainGarage` scene). IDs are **not
+`src/smart_parking_backend/services/seed_data.py` holds the exact stall IDs (from the Unity garage prefab and `MainGarage` scene). IDs are **not
 contiguous** (L3 and L4 run to `_125`); never generate them from a range. It is only the fallback before Unity reports.
 
 ## Testing without Unity

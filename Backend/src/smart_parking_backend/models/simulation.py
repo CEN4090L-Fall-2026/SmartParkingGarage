@@ -1,6 +1,6 @@
 from pydantic import BaseModel, Field
 
-from .enums import DataSource, ScenarioMode, SimulationState
+from smart_parking_backend.models.enums import DataSource, ScenarioMode, SimulationState
 
 
 class SimulationReport(BaseModel):

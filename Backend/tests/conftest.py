@@ -3,9 +3,9 @@ from datetime import UTC, datetime, timedelta
 import pytest
 from fastapi.testclient import TestClient
 
-from app.main import create_app
-from app.services.garage_state import GarageStateService
-from app.services.integration import IntegrationService
+from smart_parking_backend.main import create_app
+from smart_parking_backend.services.garage_state import GarageStateService
+from smart_parking_backend.services.integration import IntegrationService
 
 from .fake_unity import FakeUnity
 

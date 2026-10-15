@@ -51,7 +51,7 @@ The 3D garage in Unity is the simulation environment used to test the software. 
 ### Repository boundaries
 
 - Unity source stays in the UVCS workspace described below.
-- Backend source is under `Backend/` in the team GitHub checkout, with `app/`, `tests/`, and `pyproject.toml` at the backend root. Run it with `uv`; PostgreSQL and Compose are not required for the current baseline.
+- Backend source is under `Backend/` in the team GitHub checkout, with `src/smart_parking_backend/`, `tests/`, and `pyproject.toml` at the backend root. Run it with `uv`; PostgreSQL and Compose are not required for the current baseline.
 - The backend folder is outside the Unity workspace. Do not create a Git repository inside the Unity workspace or copy backend files back into it.
 - The canonical GitHub repository is <https://github.com/CEN4090L-Fall-2026/SmartParkingGarage>; keep its checkout separate from the Unity workspace.
 

@@ -16,9 +16,10 @@ import uuid
 from collections.abc import Callable
 from datetime import UTC, datetime
 
-from ..models import (
+from smart_parking_backend.models import (
     BackendCommand,
     CommandAckRequest,
+    CommandErrorCode,
     CommandPayload,
     CommandStatus,
     CommandType,
@@ -28,7 +29,10 @@ from ..models import (
     SpawnRequestStatus,
     UnityStateSnapshot,
 )
-from .garage_state import GarageStateService, NotFoundError
+from smart_parking_backend.services.garage_state import (
+    GarageStateService,
+    NotFoundError,
+)
 
 DEFAULT_TIMEOUT_SECONDS = 5.0
 DEFAULT_REDELIVERY_SECONDS = 5.0
@@ -187,12 +191,15 @@ class IntegrationService:
         status: CommandStatus,
         message: str,
         vehicle_id: str | None = None,
+        error_code: CommandErrorCode | None = None,
     ) -> None:
         command.status = status
         command.result_message = message
         command.acknowledged_at = self._utcnow()
         if vehicle_id is not None:
             command.vehicle_id = vehicle_id
+        if status == CommandStatus.FAILED:
+            command.error_code = error_code
         request_id = command.payload.spawn_request_id
         if command.command_type == CommandType.SPAWN_VEHICLE and request_id:
             if status == CommandStatus.ACKNOWLEDGED:
@@ -205,7 +212,10 @@ class IntegrationService:
                 )
             else:
                 self._garage.update_spawn_request(
-                    request_id, status=SpawnRequestStatus.FAILED, failure_reason=message
+                    request_id,
+                    status=SpawnRequestStatus.FAILED,
+                    failure_reason=message,
+                    error_code=error_code if status == CommandStatus.FAILED else None,
                 )
 
     def enqueue(
@@ -245,7 +255,9 @@ class IntegrationService:
                     "Unity is not connected; the spawn request was not created."
                 )
             request = self._garage.create_spawn_request(
-                payload.request_type, payload.preferred_level
+                payload.request_type,
+                payload.preferred_level,
+                auto_depart=payload.auto_depart,
             )
             payload = payload.model_copy(
                 update={"spawn_request_id": request.request_id}
@@ -314,7 +326,10 @@ class IntegrationService:
                     )
             else:
                 self._finish(
-                    command, CommandStatus.FAILED, ack.message or "Rejected by Unity."
+                    command,
+                    CommandStatus.FAILED,
+                    ack.message or "Rejected by Unity.",
+                    error_code=ack.error_code,
                 )
             return command.model_copy(deep=True), False
 

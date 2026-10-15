@@ -4,7 +4,8 @@ from datetime import datetime
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from .enums import (
+from smart_parking_backend.models.enums import (
+    CommandErrorCode,
     CommandStatus,
     CommandType,
     DataSource,
@@ -12,9 +13,9 @@ from .enums import (
     ScenarioMode,
     VehicleRequestType,
 )
-from .parking import ParkingSpace
-from .simulation import SimulationReport
-from .vehicles import Vehicle
+from smart_parking_backend.models.parking import ParkingSpace
+from smart_parking_backend.models.simulation import SimulationReport
+from smart_parking_backend.models.vehicles import Vehicle
 
 
 class UnityStateSnapshot(BaseModel):
@@ -89,6 +90,7 @@ class CommandPayload(BaseModel):
     scenario_mode: ScenarioMode | None = None
     request_type: VehicleRequestType | None = None
     preferred_level: Level | None = None
+    auto_depart: bool | None = None
     spawn_request_id: str | None = None
 
 
@@ -108,6 +110,7 @@ class BackendCommand(BaseModel):
     vehicle_id: str | None = Field(
         default=None, description="SpawnVehicle only: the vehicle Unity created."
     )
+    error_code: CommandErrorCode | None = None
 
 
 class CommandBatch(BaseModel):
@@ -123,6 +126,7 @@ class CommandAckRequest(BaseModel):
     success: bool
     message: str = Field(default="", max_length=1000)
     vehicle_id: str | None = None
+    error_code: CommandErrorCode | None = None
 
 
 class CommandAckResponse(BaseModel):

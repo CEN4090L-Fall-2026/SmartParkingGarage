@@ -1,6 +1,12 @@
 from pydantic import BaseModel, Field
 
-from .enums import Level, SpawnRequestStatus, VehicleLifecycleState, VehicleRequestType
+from smart_parking_backend.models.enums import (
+    CommandErrorCode,
+    Level,
+    SpawnRequestStatus,
+    VehicleLifecycleState,
+    VehicleRequestType,
+)
 
 
 class Vehicle(BaseModel):
@@ -26,6 +32,7 @@ class VehicleSpawnRequest(BaseModel):
     request_id: str = Field(examples=["REQ_0001"])
     request_type: VehicleRequestType
     preferred_level: Level | None = None
+    auto_depart: bool = True
     status: SpawnRequestStatus = SpawnRequestStatus.ACCEPTED_BY_BACKEND
     forwarded_to_unity: bool = False
     spawned_in_unity: bool = False
@@ -34,3 +41,4 @@ class VehicleSpawnRequest(BaseModel):
     )
     command_id: str | None = Field(default=None, examples=["CMD_000001"])
     failure_reason: str | None = None
+    error_code: CommandErrorCode | None = None

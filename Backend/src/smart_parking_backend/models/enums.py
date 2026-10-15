@@ -83,6 +83,13 @@ class CommandType(str, Enum):
     SPAWN_VEHICLE = "SpawnVehicle"
 
 
+class CommandErrorCode(str, Enum):
+    GARAGE_FULL = "GarageFull"
+    LEVEL_FULL = "LevelFull"
+    VEHICLE_LIMIT_REACHED = "VehicleLimitReached"
+    ENTRANCE_BLOCKED = "EntranceBlocked"
+
+
 class CommandStatus(str, Enum):
     PENDING = "Pending"  # queued, not yet handed to Unity
     DELIVERED = "Delivered"  # handed to Unity, no acknowledgement yet

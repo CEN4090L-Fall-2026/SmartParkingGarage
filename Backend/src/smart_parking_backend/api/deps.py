@@ -1,7 +1,7 @@
 from fastapi import Request, Response
 
-from ..services.garage_state import GarageStateService
-from ..services.integration import IntegrationService
+from smart_parking_backend.services.garage_state import GarageStateService
+from smart_parking_backend.services.integration import IntegrationService
 
 
 def get_service(request: Request) -> GarageStateService:

@@ -2,9 +2,9 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from .enums import DataSource
-from .integration import BackendCommand
-from .vehicles import VehicleSpawnRequest
+from smart_parking_backend.models.enums import DataSource
+from smart_parking_backend.models.integration import BackendCommand
+from smart_parking_backend.models.vehicles import VehicleSpawnRequest
 
 
 class CommandAccepted(BaseModel):

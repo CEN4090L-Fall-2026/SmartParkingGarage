@@ -1,6 +1,11 @@
 from pydantic import BaseModel, Field
 
-from .enums import DataSource, Level, ParkingSpaceState, ParkingSpaceType
+from smart_parking_backend.models.enums import (
+    DataSource,
+    Level,
+    ParkingSpaceState,
+    ParkingSpaceType,
+)
 
 
 class ParkingSpace(BaseModel):

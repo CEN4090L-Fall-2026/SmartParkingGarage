@@ -21,18 +21,12 @@ def test_invalid_transitions_fail_at_unity(client, unity):
     for path in ("pause-arrivals", "resume-arrivals", "drain"):
         command_id = post(client, path).json()["command"]["command_id"]
         unity.step()
-        assert (
-            client.get(f"/api/integration/commands/{command_id}").json()["status"]
-            == "Failed"
-        )
+        assert client.get(f"/api/integration/commands/{command_id}").json()["status"] == "Failed"
     post(client, "start")
     unity.step()
     command_id = post(client, "start").json()["command"]["command_id"]
     unity.step()
-    assert (
-        client.get(f"/api/integration/commands/{command_id}").json()["status"]
-        == "Failed"
-    )
+    assert client.get(f"/api/integration/commands/{command_id}").json()["status"] == "Failed"
     assert client.get("/api/simulation").json()["state"] == "Running"
 
 
@@ -50,9 +44,7 @@ def test_scenario_mode_changes_only_after_unity_executes(client, unity):
 def test_invalid_scenario_mode_is_rejected(client, unity):
     assert post(client, "mode", {"scenario_mode": "Gridlock"}).status_code == 422
     assert post(client, "mode", {}).status_code == 422
-    assert (
-        post(client, "mode", {"scenario_mode": "Normal", "extra": 1}).status_code == 422
-    )
+    assert post(client, "mode", {"scenario_mode": "Normal", "extra": 1}).status_code == 422
 
 
 def test_reset_restores_baseline_inventory(client, unity):

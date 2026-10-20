@@ -1,4 +1,4 @@
-from .conftest import EV_IDS, OOS_IDS
+from tests import inventory
 
 
 def test_space_inventory_and_filters(client):
@@ -10,18 +10,14 @@ def test_space_inventory_and_filters(client):
 
     out_of_service = client.get("/api/spaces", params={"state": "OutOfService"}).json()
     assert len(out_of_service) == 8
-    assert {space["space_id"] for space in out_of_service} == OOS_IDS
+    assert {space["space_id"] for space in out_of_service} == inventory.OOS_IDS
 
     ev_spaces = client.get("/api/spaces", params={"space_type": "EV"}).json()
-    assert {space["space_id"] for space in ev_spaces} == EV_IDS
+    assert {space["space_id"] for space in ev_spaces} == inventory.EV_IDS
     assert all(space["level"] == "L2" for space in ev_spaces)
-    assert (
-        len(client.get("/api/spaces", params={"space_type": "Standard"}).json()) == 406
-    )
+    assert len(client.get("/api/spaces", params={"space_type": "Standard"}).json()) == 406
 
-    combined = client.get(
-        "/api/spaces", params={"level": "L4", "state": "OutOfService"}
-    ).json()
+    combined = client.get("/api/spaces", params={"level": "L4", "state": "OutOfService"}).json()
     assert {space["space_id"] for space in combined} == {
         "L4_SPACE_017",
         "L4_SPACE_018",
@@ -33,10 +29,7 @@ def test_space_inventory_and_filters(client):
 def test_invalid_space_filters_are_rejected(client):
     assert client.get("/api/spaces", params={"level": "L9"}).status_code == 422
     assert client.get("/api/spaces", params={"state": "Broken"}).status_code == 422
-    assert (
-        client.get("/api/spaces", params={"space_type": "Accessible"}).status_code
-        == 422
-    )
+    assert client.get("/api/spaces", params={"space_type": "Accessible"}).status_code == 422
 
 
 def test_single_space_lookup(client):

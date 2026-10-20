@@ -1,6 +1,6 @@
 import pytest
 
-from .conftest import EV_IDS
+from tests import inventory
 
 
 def spawn(client, body):
@@ -21,11 +21,8 @@ def test_standard_and_ev_spawn_outcomes_are_truthful(client, unity):
     unity.step()
     vehicles = client.get("/api/vehicles").json()
     assert [vehicle["request_type"] for vehicle in vehicles] == ["Standard", "EV"]
-    assert (
-        vehicles[1]["assigned_space_id"] in EV_IDS
-        and vehicles[1]["preferred_level"] == "L2"
-    )
-    assert vehicles[0]["assigned_space_id"] not in EV_IDS
+    assert vehicles[1]["assigned_space_id"] in inventory.EV_IDS and vehicles[1]["preferred_level"] == "L2"
+    assert vehicles[0]["assigned_space_id"] not in inventory.EV_IDS
     garage = client.get("/api/garage").json()
     assert garage["reserved"] == 2 and garage["available"] == 404
 
@@ -46,7 +43,7 @@ def test_spawn_failure_is_recorded_without_creating_vehicle(client, unity):
 
 
 def test_exhausted_ev_capacity_reports_failed_execution(client, unity):
-    ev_spaces = [space for space in unity.spaces if space["space_id"] in EV_IDS]
+    ev_spaces = [space for space in unity.spaces if space["space_id"] in inventory.EV_IDS]
     assert len(ev_spaces) == 8
     for index, space in enumerate(ev_spaces, start=1):
         space.update(
@@ -64,9 +61,7 @@ def test_exhausted_ev_capacity_reports_failed_execution(client, unity):
     request = client.get(f"/api/vehicles/spawn-requests/{request_id}").json()
     command = client.get(f"/api/integration/commands/{command_id}").json()
     assert request["status"] == "Failed"
-    assert (
-        request["forwarded_to_unity"] is True and request["spawned_in_unity"] is False
-    )
+    assert request["forwarded_to_unity"] is True and request["spawned_in_unity"] is False
     assert request["vehicle_id"] is None
     assert command["status"] == "Failed" and command["vehicle_id"] is None
     assert client.get("/api/vehicles").json() == []
@@ -117,9 +112,7 @@ def test_offline_spawn_is_not_recorded(client):
     "error_code",
     ["GarageFull", "LevelFull", "VehicleLimitReached", "EntranceBlocked"],
 )
-def test_spawn_failure_error_code_is_preserved_and_first_result_wins(
-    client, unity, error_code
-):
+def test_spawn_failure_error_code_is_preserved_and_first_result_wins(client, unity, error_code):
     accepted = spawn(client, {"request_type": "Standard"})
     request_id = accepted.json()["request"]["request_id"]
     command_id = accepted.json()["command"]["command_id"]

@@ -2,58 +2,54 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Response, status
 
-from smart_parking_backend.api.deps import get_integration, get_service, tag_data_source
-from smart_parking_backend.models import (
-    CommandAccepted,
-    CommandPayload,
-    CommandType,
-    SpawnVehicleCommand,
-    Vehicle,
-    VehicleLifecycleState,
-    VehicleSpawnRequest,
-)
-from smart_parking_backend.services.garage_state import GarageStateService
-from smart_parking_backend.services.integration import IntegrationService
+from smart_parking_backend.api import deps
+from smart_parking_backend.models import commands as command_models
+from smart_parking_backend.models import enums
+from smart_parking_backend.models import integration as integration_models
+from smart_parking_backend.models import responses as response_models
+from smart_parking_backend.models import vehicles as vehicle_models
+from smart_parking_backend.services import garage_state
+from smart_parking_backend.services import integration as integration_service
 
 router = APIRouter(prefix="/api/vehicles", tags=["vehicles"])
 
 
-@router.get("", response_model=list[Vehicle])
+@router.get("", response_model=list[vehicle_models.Vehicle])
 def list_vehicles(
     response: Response,
-    service: Annotated[GarageStateService, Depends(get_service)],
-    integration: Annotated[IntegrationService, Depends(get_integration)],
-    lifecycle_state: VehicleLifecycleState | None = None,
-) -> list[Vehicle]:
+    service: Annotated[garage_state.GarageStateService, Depends(deps.get_service)],
+    integration: Annotated[integration_service.IntegrationService, Depends(deps.get_integration)],
+    lifecycle_state: enums.VehicleLifecycleState | None = None,
+) -> list[vehicle_models.Vehicle]:
     """Active simulation vehicles as last reported by Unity (empty until Unity has reported)."""
-    tag_data_source(response, integration)
+    deps.tag_data_source(response, integration)
     return service.list_vehicles(lifecycle_state)
 
 
 @router.post(
     "/spawn",
-    response_model=CommandAccepted,
+    response_model=response_models.CommandAccepted,
     status_code=status.HTTP_202_ACCEPTED,
     responses={503: {"description": "Unity is not connected."}},
 )
 def request_spawn(
-    command: SpawnVehicleCommand,
-    service: Annotated[GarageStateService, Depends(get_service)],
-    integration: Annotated[IntegrationService, Depends(get_integration)],
-) -> CommandAccepted:
+    command: command_models.SpawnVehicleCommand,
+    service: Annotated[garage_state.GarageStateService, Depends(deps.get_service)],
+    integration: Annotated[integration_service.IntegrationService, Depends(deps.get_integration)],
+) -> response_models.CommandAccepted:
     """
     Queue a SpawnVehicle command for Unity and record a spawn request. 202 means QUEUED, not spawned: the request
     reaches SpawnedInUnity (with a vehicle_id) only after Unity acknowledges success. 503 when Unity is offline.
     """
     state = service.last_known_state()
     queued, request = integration.enqueue_spawn(
-        CommandPayload(
+        integration_models.CommandPayload(
             request_type=command.request_type,
             preferred_level=command.preferred_level,
             auto_depart=command.auto_depart,
         )
     )
-    return CommandAccepted(
+    return response_models.CommandAccepted(
         message="Spawn queued for Unity. It has not been executed yet.",
         current_state=state,
         command=queued,
@@ -62,50 +58,50 @@ def request_spawn(
 
 
 # Registered before /{vehicle_id} so "spawn-requests" is never parsed as a vehicle id.
-@router.get("/spawn-requests", response_model=list[VehicleSpawnRequest])
+@router.get("/spawn-requests", response_model=list[vehicle_models.VehicleSpawnRequest])
 def list_spawn_requests(
-    service: Annotated[GarageStateService, Depends(get_service)],
-) -> list[VehicleSpawnRequest]:
+    service: Annotated[garage_state.GarageStateService, Depends(deps.get_service)],
+) -> list[vehicle_models.VehicleSpawnRequest]:
     return service.list_spawn_requests()
 
 
-@router.get("/spawn-requests/{request_id}", response_model=VehicleSpawnRequest)
+@router.get("/spawn-requests/{request_id}", response_model=vehicle_models.VehicleSpawnRequest)
 def get_spawn_request(
     request_id: str,
-    service: Annotated[GarageStateService, Depends(get_service)],
-) -> VehicleSpawnRequest:
+    service: Annotated[garage_state.GarageStateService, Depends(deps.get_service)],
+) -> vehicle_models.VehicleSpawnRequest:
     return service.get_spawn_request(request_id)
 
 
 @router.post(
     "/{vehicle_id}/depart",
-    response_model=CommandAccepted,
+    response_model=response_models.CommandAccepted,
     status_code=status.HTTP_202_ACCEPTED,
     responses={503: {"description": "Unity is not connected."}},
 )
 def request_departure(
     vehicle_id: str,
-    service: Annotated[GarageStateService, Depends(get_service)],
-    integration: Annotated[IntegrationService, Depends(get_integration)],
-) -> CommandAccepted:
+    service: Annotated[garage_state.GarageStateService, Depends(deps.get_service)],
+    integration: Annotated[integration_service.IntegrationService, Depends(deps.get_integration)],
+) -> response_models.CommandAccepted:
     """Queue a departure request for Unity; Unity validates and performs the departure."""
     state = service.last_known_state()
     queued = integration.enqueue(
-        CommandType.DEPART_VEHICLE, CommandPayload(vehicle_id=vehicle_id)
+        enums.CommandType.DEPART_VEHICLE, integration_models.CommandPayload(vehicle_id=vehicle_id)
     )
-    return CommandAccepted(
+    return response_models.CommandAccepted(
         message="Departure queued for Unity. It has not been executed yet.",
         current_state=state,
         command=queued,
     )
 
 
-@router.get("/{vehicle_id}", response_model=Vehicle)
+@router.get("/{vehicle_id}", response_model=vehicle_models.Vehicle)
 def get_vehicle(
     vehicle_id: str,
     response: Response,
-    service: Annotated[GarageStateService, Depends(get_service)],
-    integration: Annotated[IntegrationService, Depends(get_integration)],
-) -> Vehicle:
-    tag_data_source(response, integration)
+    service: Annotated[garage_state.GarageStateService, Depends(deps.get_service)],
+    integration: Annotated[integration_service.IntegrationService, Depends(deps.get_integration)],
+) -> vehicle_models.Vehicle:
+    deps.tag_data_source(response, integration)
     return service.get_vehicle(vehicle_id)

@@ -2,9 +2,9 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from smart_parking_backend.models.enums import DataSource
-from smart_parking_backend.models.integration import BackendCommand
-from smart_parking_backend.models.vehicles import VehicleSpawnRequest
+from smart_parking_backend.models import enums
+from smart_parking_backend.models import integration as integration_models
+from smart_parking_backend.models import vehicles as vehicle_models
 
 
 class CommandAccepted(BaseModel):
@@ -15,18 +15,14 @@ class CommandAccepted(BaseModel):
 
     success: bool = True
     message: str
-    current_state: str | None = Field(
-        description="Last Unity-reported simulation state, before this command."
-    )
-    command: BackendCommand
-    request: VehicleSpawnRequest | None = Field(
-        default=None, description="SpawnVehicle only."
-    )
+    current_state: str | None = Field(description="Last Unity-reported simulation state, before this command.")
+    command: integration_models.BackendCommand
+    request: vehicle_models.VehicleSpawnRequest | None = Field(default=None, description="SpawnVehicle only.")
 
 
 class ErrorResponse(BaseModel):
     success: bool = False
     message: str
     current_state: str | None = None
-    data_source: DataSource | None = None
+    data_source: enums.DataSource | None = None
     detail: Any | None = None

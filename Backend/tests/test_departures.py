@@ -1,12 +1,8 @@
-from .fake_unity import FakeUnity
+from tests import fake_unity
 
 
 def _publish_vehicle_pair(unity, first_state="Parked"):
-    available = [
-        space
-        for space in unity.spaces
-        if space["state"] == "Available" and space["space_type"] == "Standard"
-    ]
+    available = [space for space in unity.spaces if space["state"] == "Available" and space["space_type"] == "Standard"]
     first_space, second_space = available[:2]
     first_vehicle = {
         "vehicle_id": "DRIVER_A",
@@ -40,9 +36,7 @@ def _publish_vehicle_pair(unity, first_state="Parked"):
     return first_vehicle, second_vehicle, first_space, second_space
 
 
-def test_departure_queues_target_and_projection_changes_only_from_snapshots(
-    client, unity
-):
+def test_departure_queues_target_and_projection_changes_only_from_snapshots(client, unity):
     first, _, first_space, second_space = _publish_vehicle_pair(unity)
     original_vehicles = client.get("/api/vehicles").json()
     original_spaces = client.get("/api/spaces", params={"state": "Occupied"}).json()
@@ -58,55 +52,31 @@ def test_departure_queues_target_and_projection_changes_only_from_snapshots(
     assert command["payload"]["vehicle_id"] == "DRIVER_A"
     assert command["status"] == "Pending"
     assert client.get("/api/vehicles").json() == original_vehicles
-    assert (
-        client.get("/api/spaces", params={"state": "Occupied"}).json()
-        == original_spaces
-    )
+    assert client.get("/api/spaces", params={"state": "Occupied"}).json() == original_spaces
 
     delivered = unity.poll()
     assert [item["command_id"] for item in delivered] == [command["command_id"]]
-    assert (
-        unity.ack(command["command_id"], True, "Departure started.").status_code == 200
-    )
+    assert unity.ack(command["command_id"], True, "Departure started.").status_code == 200
     assert client.get("/api/vehicles").json() == original_vehicles
-    assert (
-        client.get("/api/spaces", params={"state": "Occupied"}).json()
-        == original_spaces
-    )
+    assert client.get("/api/spaces", params={"state": "Occupied"}).json() == original_spaces
 
     first["lifecycle_state"] = "Departing"
     assert unity.snapshot().status_code == 200
-    vehicles = {
-        vehicle["vehicle_id"]: vehicle for vehicle in client.get("/api/vehicles").json()
-    }
+    vehicles = {vehicle["vehicle_id"]: vehicle for vehicle in client.get("/api/vehicles").json()}
     assert vehicles["DRIVER_A"]["lifecycle_state"] == "Departing"
     assert vehicles["DRIVER_B"]["lifecycle_state"] == "Parked"
-    assert (
-        client.get(f"/api/spaces/{first_space['space_id']}").json()["state"]
-        == "Occupied"
-    )
-    assert (
-        client.get(f"/api/spaces/{second_space['space_id']}").json()["state"]
-        == "Occupied"
-    )
+    assert client.get(f"/api/spaces/{first_space['space_id']}").json()["state"] == "Occupied"
+    assert client.get(f"/api/spaces/{second_space['space_id']}").json()["state"] == "Occupied"
 
     unity.vehicles.remove(first)
     first_space.update(state="Available", assigned_vehicle_id=None, reserved_by=None)
     unity.sim["total_completed"] += 1
     assert unity.snapshot().status_code == 200
-    vehicles = {
-        vehicle["vehicle_id"]: vehicle for vehicle in client.get("/api/vehicles").json()
-    }
+    vehicles = {vehicle["vehicle_id"]: vehicle for vehicle in client.get("/api/vehicles").json()}
     assert list(vehicles) == ["DRIVER_B"]
     assert vehicles["DRIVER_B"]["assigned_space_id"] == second_space["space_id"]
-    assert (
-        client.get(f"/api/spaces/{first_space['space_id']}").json()["state"]
-        == "Available"
-    )
-    assert (
-        client.get(f"/api/spaces/{second_space['space_id']}").json()["state"]
-        == "Occupied"
-    )
+    assert client.get(f"/api/spaces/{first_space['space_id']}").json()["state"] == "Available"
+    assert client.get(f"/api/spaces/{second_space['space_id']}").json()["state"] == "Occupied"
     assert client.get("/api/garage").json()["occupied"] == original_occupied - 1
 
 
@@ -135,10 +105,7 @@ def test_unity_rejection_is_recorded_without_backend_vehicle_validation(client, 
     assert duplicate.status_code == 200 and duplicate.json()["duplicate"] is True
     assert client.get(f"/api/integration/commands/{command_id}").json() == result
     assert client.get("/api/vehicles").json() == original_vehicles
-    assert (
-        client.get("/api/spaces", params={"state": "Occupied"}).json()
-        == original_spaces
-    )
+    assert client.get("/api/spaces", params={"state": "Occupied"}).json() == original_spaces
 
 
 def test_unknown_departure_target_is_queued_for_unity_to_reject(client, unity):
@@ -149,10 +116,7 @@ def test_unknown_departure_target_is_queued_for_unity_to_reject(client, unity):
     assert command["payload"]["vehicle_id"] == "NOT_PRESENT"
     assert unity.ack(command_id, False, "Vehicle not found.").status_code == 200
     assert client.get("/api/vehicles").json() == []
-    assert (
-        client.get(f"/api/integration/commands/{command_id}").json()["status"]
-        == "Failed"
-    )
+    assert client.get(f"/api/integration/commands/{command_id}").json()["status"] == "Failed"
 
 
 def test_departure_offline_request_does_not_queue_command(client):
@@ -175,7 +139,7 @@ def test_departure_redelivers_and_old_session_cannot_acknowledge(client, unity, 
     assert second_delivery["delivery_count"] == 2
     assert second_delivery["payload"]["vehicle_id"] == "DRIVER_A"
 
-    new_unity = FakeUnity(client, session="SESSION_B")
+    new_unity = fake_unity.FakeUnity(client, session="SESSION_B")
     assert new_unity.snapshot().status_code == 200
     result = client.get(f"/api/integration/commands/{command_id}").json()
     assert result["status"] == "Cancelled"

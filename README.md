@@ -7,17 +7,13 @@ Team repository: <https://github.com/CEN4090L-Fall-2026/SmartParkingGarage>.
 The FastAPI backend lives in [`Backend/`](Backend/). It exposes Unity-reported garage state and queues
 commands for Unity; assignments and vehicle movement remain Unity-owned. State is currently in memory.
 
-From this repository's root:
+## Documentation
 
-```bash
-cd Backend
-uv sync
-uv run uvicorn smart_parking_backend.main:app --host 127.0.0.1 --port 8000
-```
-
-See [the backend README](Backend/README.md) for API contracts, quality checks, and integration details.
+- [Backend setup and Unity integration](Backend/README.md)
+- [Dashboard API quick reference](docs/frontend-api.md)
+- [Historical backend status report #2](docs/reports/backend-status-report-02.md)
 
 ## Source ownership
 
-Unity remains in its separate UVCS workspace. Clone this GitHub repository outside that workspace;
-do not copy these backend changes into the Unity project. Operator and driver dashboards remain planned.
+Unity remains in its separate UVCS workspace, and the dashboards are maintained separately.
+Clone this GitHub repository outside the Unity workspace; do not copy backend changes into it.

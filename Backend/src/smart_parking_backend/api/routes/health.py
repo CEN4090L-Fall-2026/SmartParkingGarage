@@ -1,7 +1,7 @@
 from fastapi import APIRouter
 from pydantic import BaseModel
 
-from smart_parking_backend import SERVICE_NAME, __version__
+import smart_parking_backend
 
 router = APIRouter(tags=["health"])
 
@@ -14,4 +14,6 @@ class HealthResponse(BaseModel):
 
 @router.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
-    return HealthResponse(status="ok", service=SERVICE_NAME, version=__version__)
+    return HealthResponse(
+        status="ok", service=smart_parking_backend.SERVICE_NAME, version=smart_parking_backend.__version__
+    )

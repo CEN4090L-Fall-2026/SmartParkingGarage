@@ -14,10 +14,7 @@ class FakeUnity:
         self.client = client
         self.session = session
         self.sequence = 0
-        self.spaces = [
-            dict(s, assigned_vehicle_id=None, reserved_by=None)
-            for s in client.get("/api/spaces").json()
-        ]
+        self.spaces = [dict(s, assigned_vehicle_id=None, reserved_by=None) for s in client.get("/api/spaces").json()]
         self.sim = {
             "state": "Idle",
             "scenario_mode": "Normal",
@@ -35,9 +32,7 @@ class FakeUnity:
     def body(self, sequence=None):
         self.sequence += 1
         self.sim["active_vehicles"] = len(self.vehicles)
-        self.sim["parked_vehicles"] = sum(
-            1 for v in self.vehicles if v["lifecycle_state"] == "Parked"
-        )
+        self.sim["parked_vehicles"] = sum(1 for v in self.vehicles if v["lifecycle_state"] == "Parked")
         return {
             "unity_session_id": self.session,
             "sequence": self.sequence if sequence is None else sequence,
@@ -117,9 +112,7 @@ class FakeUnity:
         elif kind == "ResetSimulation":
             for space in self.spaces:
                 if space["state"] != "OutOfService":
-                    space.update(
-                        state="Available", assigned_vehicle_id=None, reserved_by=None
-                    )
+                    space.update(state="Available", assigned_vehicle_id=None, reserved_by=None)
             self.vehicles.clear()
             self.sim.update(
                 state="Idle",
@@ -135,20 +128,14 @@ class FakeUnity:
                 return False, "Manual arrivals are disabled while draining.", None
             wanted = payload["request_type"]
             level = payload.get("preferred_level")
-            pool = [
-                s
-                for s in self.spaces
-                if s["state"] == "Available" and s["space_type"] == wanted
-            ]
+            pool = [s for s in self.spaces if s["state"] == "Available" and s["space_type"] == wanted]
             preferred = [s for s in pool if level is None or s["level"] == level]
             chosen = (preferred or pool or [None])[0]
             if chosen is None:
                 return False, "No matching available space.", None
             number = self.sim["total_spawned"] + 1
             vehicle_id, requester = f"VEH_{number:04d}", f"SIM_VEH_{number:04d}"
-            chosen.update(
-                state="Reserved", assigned_vehicle_id=vehicle_id, reserved_by=requester
-            )
+            chosen.update(state="Reserved", assigned_vehicle_id=vehicle_id, reserved_by=requester)
             self.vehicles.append(
                 {
                     "vehicle_id": vehicle_id,

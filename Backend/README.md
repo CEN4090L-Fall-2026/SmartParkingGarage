@@ -13,7 +13,7 @@ The personal `CrashHermit/SmartParkingGarage-Backend` repository is not the team
   projection** of what Unity last reported. It never decides simulation outcomes.
 - Until a Unity session reports, queries return the **seeded baseline** (414 stalls, 406 operational, 8 OutOfService,
   8 EV on L2). Once Unity reports, its snapshot **replaces** the projection completely; nothing is merged with the seed.
-- State is **in memory only** (lost on restart). No database, auth, WebSockets or dashboard yet.
+- State is **in memory only** (lost on restart). No database, authentication, or WebSockets; dashboards consume this API from separate projects.
 
 ## Setup (Python 3.11+), run, test
 
@@ -28,15 +28,17 @@ uv run ruff check src tests
 ```
 
 Run one server process: snapshots and command queues are process-local. PostgreSQL, Docker, and a `.env` file are
-not required for this baseline. Stop the other backend server before using port 8000. Unity already targets
-`http://127.0.0.1:8000`; no Unity code or scene changes are needed. Reloading or restarting the server clears its state.
+not required. Use an available port; the existing Unity baseline bridge targets `http://127.0.0.1:8000`.
+Driver-specific fields and commands require a matching Unity bridge implementation.
+Reloading or restarting the backend clears its state.
 
 The development dependencies (pytest, httpx, Ruff) are installed by `uv sync`. The backend tests use isolated app
 instances and a controllable clock; they do not connect to Unity or a development database.
 
 Docs: <http://127.0.0.1:8000/docs>, `/redoc`, `/openapi.json`.
 
-Dashboard developers: [API quick reference](Frontend_API_Guide.md).
+Dashboard developers: [API quick reference](../docs/frontend-api.md).
+Previous handoff: [backend status report #2](../docs/reports/backend-status-report-02.md) (historical).
 
 ## Unity <-> backend bridge: REST polling
 
@@ -55,8 +57,9 @@ changes nothing. A different session id is a new session: it is accepted, sequen
 open for the old session are cancelled. If the backend restarts (`backend_instance_id` changes) Unity starts a new session.
 
 **Connectivity.** `connected` is true while the last accepted snapshot is at most `SPG_INTEGRATION_TIMEOUT_SECONDS`
-(default 5) old. Query endpoints always answer and carry an `X-Data-Source` header (`SeededBaseline`, `UnityLive`,
-`UnityLastKnown`); the garage and simulation bodies carry the same `data_source` field.
+(default 5) old. Garage, space, vehicle, and simulation projection responses carry `X-Data-Source`:
+`SeededBaseline`, `UnityLive`, or `UnityLastKnown`. Garage and simulation also include `data_source` in their bodies.
+Integration status reports freshness in its body; command and spawn-request queries are records, not freshness indicators.
 
 **Commands.** `POST /api/simulation/{start,pause-arrivals,resume-arrivals,drain,reset,mode}`, `POST /api/vehicles/spawn`,
 and `POST /api/vehicles/{vehicle_id}/depart` **queue** commands and return **202** (queued, not executed). The
@@ -88,24 +91,16 @@ result. Poll `GET /api/integration/commands/{command_id}` for the command outcom
 - **Spawn requests** move `AcceptedByBackend -> ForwardedToUnity -> SpawnedInUnity` (with the `vehicle_id` Unity reports)
   or `Failed`. Only `SpawnedInUnity` means a vehicle exists.
 
-## Endpoints
+## Integration endpoints
+
+The [dashboard API quick reference](../docs/frontend-api.md) lists client-facing endpoints and request fields.
+These endpoints are for the Unity bridge, not dashboard execution:
 
 | Method | Path | Notes |
 | --- | --- | --- |
-| GET | `/health` | status, service, version |
-| GET | `/api/garage` | totals and per-level summary (derived from the reported spaces) |
-| GET | `/api/spaces`, `/api/spaces/{space_id}` | filters: `level`, `state`, `space_type`; 404 if unknown |
-| GET | `/api/vehicles`, `/api/vehicles/{vehicle_id}` | active vehicles as Unity reported them |
-| POST | `/api/vehicles/spawn` | 202, queues SpawnVehicle; 503 offline |
-| POST | `/api/vehicles/{vehicle_id}/depart` | 202, queues DepartVehicle for Unity; 503 offline |
-| GET | `/api/vehicles/spawn-requests[/{request_id}]` | spawn request records |
-| GET | `/api/simulation` | status |
-| POST | `/api/simulation/start`, `pause-arrivals`, `resume-arrivals`, `drain`, `reset`, `mode` | 202 queued; 503 offline |
-| POST | `/api/integration/state` | Unity snapshot; 409 stale, 422 malformed |
-| GET | `/api/integration/status` | connected, session, sequence, last update, age |
-| GET | `/api/integration/commands` | pending commands for a session |
-| GET | `/api/integration/commands/{command_id}` | one command's outcome |
-| POST | `/api/integration/commands/{command_id}/ack` | Unity's result |
+| POST | `/api/integration/state` | Full Unity snapshot; 409 stale |
+| GET | `/api/integration/commands?unity_session_id=...` | Commands for execution; may redeliver |
+| POST | `/api/integration/commands/{command_id}/ack` | Unity's result; first terminal result wins |
 
 Status codes: 200 query, 202 command queued, 404 unknown, 409 stale snapshot / wrong session, 422 invalid input, 503 Unity offline.
 CORS allows only `http://localhost:3000`, `http://localhost:5173`, `http://127.0.0.1:3000`, `http://127.0.0.1:5173`.
@@ -121,15 +116,13 @@ contiguous** (L3 and L4 run to `_125`); never generate them from a range. It is 
 spawn outcomes. It is not a physics or traffic simulator; backend test results do not validate Unity vehicle movement.
 
 
-## Backend cutover
+## Code organization and style
 
-This workspace adopts the handed-off application from `SmartParkingGarage/Backend` while leaving that Unity workspace
-unchanged. The former database-owned `/parking-assignments` and `/parking-spaces` mutation API, SQLAlchemy bootstrap,
-and PostgreSQL Compose configuration have been removed from the active implementation. They are not compatibility paths.
-Unity continues to select stalls and report their resulting state. Persistence is deferred, not silently provided.
+- `api/routes/` defines HTTP handlers; `api/deps.py` resolves the application services.
+- `models/` owns typed wire contracts and enum values; `services/` owns the projection and command lifecycle.
+- Project-local imports use absolute module paths and qualified names, following adapted [Google Python conventions](https://google.github.io/styleguide/pyguide.html#22-imports). Models are imported from their owning modules, not re-exported by `models/__init__.py`.
+- Nontrivial service contracts use explicit return types and concise Google-style `Args`, `Returns`, and `Raises` docstrings. Standard-library and third-party imports retain existing FastAPI/Pydantic conventions.
+- Ruff is the formatter and linter, with a 120-column line length rather than Google's 80-column wrapping.
+- `tests/conftest.py` provides fixtures; `tests/inventory.py` holds independent inventory expectations; `tests/fake_unity.py` exercises the HTTP protocol.
 
-The old sibling backend was preserved locally in `Backend-before-handoff-2026-10-05.Lo9CYS.tar.gz` beside
-the original sibling workspace before replacement. That archive is not included in GitHub.
-No PostgreSQL database or volume was reset or deleted.
-The numbered DOCX handoffs remain unchanged. Earlier Unity onboarding notes are historical; this README is the current
-backend setup and ownership reference.
+The numbered DOCX handoffs are historical. This README and the dashboard API reference describe the current backend.

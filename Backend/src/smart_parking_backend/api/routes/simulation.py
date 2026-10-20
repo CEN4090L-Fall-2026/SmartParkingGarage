@@ -2,21 +2,14 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Response, status
 
-from smart_parking_backend.api.deps import get_integration, get_service, tag_data_source
-from smart_parking_backend.models import (
-    BeginDrainCommand,
-    CommandAccepted,
-    CommandPayload,
-    CommandType,
-    PauseArrivalsCommand,
-    ResetSimulationCommand,
-    ResumeArrivalsCommand,
-    SetScenarioModeCommand,
-    SimulationStatus,
-    StartSimulationCommand,
-)
-from smart_parking_backend.services.garage_state import GarageStateService
-from smart_parking_backend.services.integration import IntegrationService
+from smart_parking_backend.api import deps
+from smart_parking_backend.models import commands as command_models
+from smart_parking_backend.models import enums
+from smart_parking_backend.models import integration as integration_models
+from smart_parking_backend.models import responses as response_models
+from smart_parking_backend.models import simulation as simulation_models
+from smart_parking_backend.services import garage_state
+from smart_parking_backend.services import integration as integration_service
 
 router = APIRouter(prefix="/api/simulation", tags=["simulation"])
 
@@ -24,118 +17,118 @@ _QUEUED = {503: {"description": "Unity is not connected; nothing was queued."}}
 
 
 def _queue(
-    service: GarageStateService,
-    integration: IntegrationService,
-    command_type: CommandType,
+    service: garage_state.GarageStateService,
+    integration: integration_service.IntegrationService,
+    command_type: enums.CommandType,
     message: str,
-    payload: CommandPayload | None = None,
-) -> CommandAccepted:
+    payload: integration_models.CommandPayload | None = None,
+) -> response_models.CommandAccepted:
     """Queue for Unity. The simulation state changes only when Unity executes it and reports back."""
     state = service.last_known_state()
     command = integration.enqueue(command_type, payload)
-    return CommandAccepted(
+    return response_models.CommandAccepted(
         message=f"{message} queued for Unity. It has not been executed yet.",
         current_state=state,
         command=command,
     )
 
 
-@router.get("", response_model=SimulationStatus)
+@router.get("", response_model=simulation_models.SimulationStatus)
 def get_simulation(
     response: Response,
-    service: Annotated[GarageStateService, Depends(get_service)],
-    integration: Annotated[IntegrationService, Depends(get_integration)],
-) -> SimulationStatus:
-    tag_data_source(response, integration)
+    service: Annotated[garage_state.GarageStateService, Depends(deps.get_service)],
+    integration: Annotated[integration_service.IntegrationService, Depends(deps.get_integration)],
+) -> simulation_models.SimulationStatus:
+    deps.tag_data_source(response, integration)
     return service.simulation_status(integration.data_source())
 
 
 @router.post(
     "/start",
-    response_model=CommandAccepted,
+    response_model=response_models.CommandAccepted,
     status_code=status.HTTP_202_ACCEPTED,
     responses=_QUEUED,
 )
 def start(
-    service: Annotated[GarageStateService, Depends(get_service)],
-    integration: Annotated[IntegrationService, Depends(get_integration)],
-    command: StartSimulationCommand | None = None,
-) -> CommandAccepted:
-    return _queue(service, integration, CommandType.START_SIMULATION, "Start")
+    service: Annotated[garage_state.GarageStateService, Depends(deps.get_service)],
+    integration: Annotated[integration_service.IntegrationService, Depends(deps.get_integration)],
+    command: command_models.StartSimulationCommand | None = None,
+) -> response_models.CommandAccepted:
+    return _queue(service, integration, enums.CommandType.START_SIMULATION, "Start")
 
 
 @router.post(
     "/pause-arrivals",
-    response_model=CommandAccepted,
+    response_model=response_models.CommandAccepted,
     status_code=status.HTTP_202_ACCEPTED,
     responses=_QUEUED,
 )
 def pause_arrivals(
-    service: Annotated[GarageStateService, Depends(get_service)],
-    integration: Annotated[IntegrationService, Depends(get_integration)],
-    command: PauseArrivalsCommand | None = None,
-) -> CommandAccepted:
-    return _queue(service, integration, CommandType.PAUSE_ARRIVALS, "Pause arrivals")
+    service: Annotated[garage_state.GarageStateService, Depends(deps.get_service)],
+    integration: Annotated[integration_service.IntegrationService, Depends(deps.get_integration)],
+    command: command_models.PauseArrivalsCommand | None = None,
+) -> response_models.CommandAccepted:
+    return _queue(service, integration, enums.CommandType.PAUSE_ARRIVALS, "Pause arrivals")
 
 
 @router.post(
     "/resume-arrivals",
-    response_model=CommandAccepted,
+    response_model=response_models.CommandAccepted,
     status_code=status.HTTP_202_ACCEPTED,
     responses=_QUEUED,
 )
 def resume_arrivals(
-    service: Annotated[GarageStateService, Depends(get_service)],
-    integration: Annotated[IntegrationService, Depends(get_integration)],
-    command: ResumeArrivalsCommand | None = None,
-) -> CommandAccepted:
-    return _queue(service, integration, CommandType.RESUME_ARRIVALS, "Resume arrivals")
+    service: Annotated[garage_state.GarageStateService, Depends(deps.get_service)],
+    integration: Annotated[integration_service.IntegrationService, Depends(deps.get_integration)],
+    command: command_models.ResumeArrivalsCommand | None = None,
+) -> response_models.CommandAccepted:
+    return _queue(service, integration, enums.CommandType.RESUME_ARRIVALS, "Resume arrivals")
 
 
 @router.post(
     "/drain",
-    response_model=CommandAccepted,
+    response_model=response_models.CommandAccepted,
     status_code=status.HTTP_202_ACCEPTED,
     responses=_QUEUED,
 )
 def drain(
-    service: Annotated[GarageStateService, Depends(get_service)],
-    integration: Annotated[IntegrationService, Depends(get_integration)],
-    command: BeginDrainCommand | None = None,
-) -> CommandAccepted:
-    return _queue(service, integration, CommandType.BEGIN_DRAIN, "Drain")
+    service: Annotated[garage_state.GarageStateService, Depends(deps.get_service)],
+    integration: Annotated[integration_service.IntegrationService, Depends(deps.get_integration)],
+    command: command_models.BeginDrainCommand | None = None,
+) -> response_models.CommandAccepted:
+    return _queue(service, integration, enums.CommandType.BEGIN_DRAIN, "Drain")
 
 
 @router.post(
     "/reset",
-    response_model=CommandAccepted,
+    response_model=response_models.CommandAccepted,
     status_code=status.HTTP_202_ACCEPTED,
     responses=_QUEUED,
 )
 def reset(
-    service: Annotated[GarageStateService, Depends(get_service)],
-    integration: Annotated[IntegrationService, Depends(get_integration)],
-    command: ResetSimulationCommand | None = None,
-) -> CommandAccepted:
+    service: Annotated[garage_state.GarageStateService, Depends(deps.get_service)],
+    integration: Annotated[integration_service.IntegrationService, Depends(deps.get_integration)],
+    command: command_models.ResetSimulationCommand | None = None,
+) -> response_models.CommandAccepted:
     """Queue a reset. Commands not yet delivered to Unity are cancelled as obsolete."""
-    return _queue(service, integration, CommandType.RESET_SIMULATION, "Reset")
+    return _queue(service, integration, enums.CommandType.RESET_SIMULATION, "Reset")
 
 
 @router.post(
     "/mode",
-    response_model=CommandAccepted,
+    response_model=response_models.CommandAccepted,
     status_code=status.HTTP_202_ACCEPTED,
     responses=_QUEUED,
 )
 def set_mode(
-    command: SetScenarioModeCommand,
-    service: Annotated[GarageStateService, Depends(get_service)],
-    integration: Annotated[IntegrationService, Depends(get_integration)],
-) -> CommandAccepted:
+    command: command_models.SetScenarioModeCommand,
+    service: Annotated[garage_state.GarageStateService, Depends(deps.get_service)],
+    integration: Annotated[integration_service.IntegrationService, Depends(deps.get_integration)],
+) -> response_models.CommandAccepted:
     return _queue(
         service,
         integration,
-        CommandType.SET_SCENARIO_MODE,
+        enums.CommandType.SET_SCENARIO_MODE,
         "Scenario mode change",
-        CommandPayload(scenario_mode=command.scenario_mode),
+        integration_models.CommandPayload(scenario_mode=command.scenario_mode),
     )

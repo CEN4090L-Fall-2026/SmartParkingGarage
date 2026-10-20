@@ -1,12 +1,6 @@
 from pydantic import BaseModel, Field
 
-from smart_parking_backend.models.enums import (
-    CommandErrorCode,
-    Level,
-    SpawnRequestStatus,
-    VehicleLifecycleState,
-    VehicleRequestType,
-)
+from smart_parking_backend.models import enums
 
 
 class Vehicle(BaseModel):
@@ -14,10 +8,10 @@ class Vehicle(BaseModel):
 
     vehicle_id: str = Field(examples=["VEH_0001"])
     requester_id: str = Field(examples=["SIM_VEH_0001"])
-    request_type: VehicleRequestType
-    lifecycle_state: VehicleLifecycleState
+    request_type: enums.VehicleRequestType
+    lifecycle_state: enums.VehicleLifecycleState
     assigned_space_id: str | None = None
-    preferred_level: Level | None = None
+    preferred_level: enums.Level | None = None
     failure_reason: str | None = None
 
 
@@ -30,15 +24,13 @@ class VehicleSpawnRequest(BaseModel):
     """
 
     request_id: str = Field(examples=["REQ_0001"])
-    request_type: VehicleRequestType
-    preferred_level: Level | None = None
+    request_type: enums.VehicleRequestType
+    preferred_level: enums.Level | None = None
     auto_depart: bool = True
-    status: SpawnRequestStatus = SpawnRequestStatus.ACCEPTED_BY_BACKEND
+    status: enums.SpawnRequestStatus = enums.SpawnRequestStatus.ACCEPTED_BY_BACKEND
     forwarded_to_unity: bool = False
     spawned_in_unity: bool = False
-    vehicle_id: str | None = Field(
-        default=None, description="Set only once Unity has spawned the vehicle."
-    )
+    vehicle_id: str | None = Field(default=None, description="Set only once Unity has spawned the vehicle.")
     command_id: str | None = Field(default=None, examples=["CMD_000001"])
     failure_reason: str | None = None
-    error_code: CommandErrorCode | None = None
+    error_code: enums.CommandErrorCode | None = None

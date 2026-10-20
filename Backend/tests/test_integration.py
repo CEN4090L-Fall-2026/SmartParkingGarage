@@ -1,6 +1,6 @@
 import copy
 
-from .fake_unity import FakeUnity
+from tests import fake_unity
 
 
 def status(client):
@@ -24,12 +24,8 @@ def test_snapshot_connectivity_timeout_and_reconnect(client, unity, clock):
 
 
 def test_snapshot_projects_live_state(client, unity):
-    target = next(
-        space for space in unity.spaces if space["space_id"] == "L3_SPACE_001"
-    )
-    target.update(
-        state="Occupied", assigned_vehicle_id="VEH_0001", reserved_by="SIM_VEH_0001"
-    )
+    target = next(space for space in unity.spaces if space["space_id"] == "L3_SPACE_001")
+    target.update(state="Occupied", assigned_vehicle_id="VEH_0001", reserved_by="SIM_VEH_0001")
     unity.vehicles.append(
         {
             "vehicle_id": "VEH_0001",
@@ -50,10 +46,7 @@ def test_snapshot_projects_live_state(client, unity):
         1,
         8,
     )
-    assert (
-        client.get("/api/spaces/L3_SPACE_001").json()["assigned_vehicle_id"]
-        == "VEH_0001"
-    )
+    assert client.get("/api/spaces/L3_SPACE_001").json()["assigned_vehicle_id"] == "VEH_0001"
     assert len(client.get("/api/spaces", params={"state": "Occupied"}).json()) == 1
     assert client.get("/api/vehicles/VEH_0001").json()["lifecycle_state"] == "Parked"
     simulation = client.get("/api/simulation").json()
@@ -72,13 +65,10 @@ def test_new_session_restarts_sequence(client, unity):
     unity.snapshot()
     unity.snapshot()
     assert status(client)["latest_sequence"] == 3
-    other = FakeUnity(client, session="SESSION_B")
+    other = fake_unity.FakeUnity(client, session="SESSION_B")
     response = other.snapshot()
     assert response.status_code == 200
-    assert (
-        response.json()["new_session"] is True
-        and response.json()["latest_sequence"] == 1
-    )
+    assert response.json()["new_session"] is True and response.json()["latest_sequence"] == 1
     assert status(client)["unity_session_id"] == "SESSION_B"
     assert other.snapshot().json()["latest_sequence"] == 2
 
@@ -143,9 +133,7 @@ def test_stale_snapshot_is_rejected_without_regressing_state(client, unity):
     stale["spaces"][0]["state"] = "Occupied"
     response = client.post("/api/integration/state", json=stale)
     assert response.status_code == 409
-    assert (
-        response.json()["accepted"] is False and response.json()["latest_sequence"] == 2
-    )
+    assert response.json()["accepted"] is False and response.json()["latest_sequence"] == 2
     equal = unity.body(sequence=2)
     equal["simulation"]["state"] = "Draining"
     assert client.post("/api/integration/state", json=equal).status_code == 409

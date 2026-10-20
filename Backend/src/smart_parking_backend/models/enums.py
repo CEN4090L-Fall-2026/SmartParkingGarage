@@ -55,13 +55,9 @@ class ScenarioMode(str, Enum):
 class SpawnRequestStatus(str, Enum):
     """Lifecycle of a spawn request. Only SpawnedInUnity means Unity actually created the vehicle."""
 
-    ACCEPTED_BY_BACKEND = (
-        "AcceptedByBackend"  # stored and queued as a command; Unity has not received it
-    )
+    ACCEPTED_BY_BACKEND = "AcceptedByBackend"  # stored and queued as a command; Unity has not received it
     FORWARDED_TO_UNITY = "ForwardedToUnity"  # Unity has fetched the command
-    SPAWNED_IN_UNITY = (
-        "SpawnedInUnity"  # Unity acknowledged that it spawned the vehicle
-    )
+    SPAWNED_IN_UNITY = "SpawnedInUnity"  # Unity acknowledged that it spawned the vehicle
     FAILED = "Failed"  # Unity rejected it, or it was cancelled before execution
 
 

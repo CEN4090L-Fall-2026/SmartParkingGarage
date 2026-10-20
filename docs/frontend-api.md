@@ -2,6 +2,8 @@
 
 **Base URL:** `http://127.0.0.1:8000` · **Interactive schemas:** `/docs`
 
+Backend setup: [README](../Backend/README.md).
+
 Use JSON bodies with `Content-Type: application/json`. Field names use `snake_case`; enum values are case-sensitive. Vite origins allowed: `http://localhost:5173` and `http://127.0.0.1:5173` (port 3000 is also allowed).
 
 ## Read data
@@ -56,4 +58,4 @@ Use JSON bodies with `Content-Type: application/json`. Field names use `snake_ca
 
 **Restart:** state is in memory. If `backend_instance_id` changes, clear old command/request tracking; IDs may be reused. There is no authentication or driver-specific request ownership yet.
 
-**Unity handoff still required:** the inspected Unity bridge does not yet consume `auto_depart`, handle `DepartVehicle`, or send `error_code`. Backend support is implemented; live behavior requires those Unity changes and joint testing. CCTV endpoints are not implemented. Dashboards must not send Unity snapshots, fetch commands for execution, or acknowledge commands.
+**Unity integration:** confirm the deployed Unity bridge consumes `auto_depart`, handles `DepartVehicle`, and sends `error_code`. Backend support is implemented; live behavior requires a matching bridge and joint testing. CCTV endpoints are not implemented. Dashboards must not send Unity snapshots, fetch commands for execution, or acknowledge commands.

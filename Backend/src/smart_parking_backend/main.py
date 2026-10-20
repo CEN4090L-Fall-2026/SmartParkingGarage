@@ -2,7 +2,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from smart_parking_backend import __version__
+import smart_parking_backend
 from smart_parking_backend.api.routes import (
     garage,
     health,
@@ -11,16 +11,8 @@ from smart_parking_backend.api.routes import (
     vehicles,
 )
 from smart_parking_backend.api.routes import integration as integration_routes
-from smart_parking_backend.services.garage_state import (
-    GarageStateService,
-    NotFoundError,
-)
-from smart_parking_backend.services.integration import (
-    IntegrationService,
-    SessionMismatchError,
-    StaleSnapshotError,
-    UnityOfflineError,
-)
+from smart_parking_backend.services import garage_state
+from smart_parking_backend.services import integration as integration_service
 
 # Explicit local development origins for future React clients; deliberately not "*".
 ALLOWED_ORIGINS = [
@@ -32,21 +24,19 @@ ALLOWED_ORIGINS = [
 
 
 def create_app(
-    service: GarageStateService | None = None,
-    integration: IntegrationService | None = None,
+    service: garage_state.GarageStateService | None = None,
+    integration: integration_service.IntegrationService | None = None,
 ) -> FastAPI:
     app = FastAPI(
         title="Smart Parking Garage Backend",
-        version=__version__,
+        version=smart_parking_backend.__version__,
         description=(
             "REST API and shared contracts. Unity is authoritative for live simulation state and reports it "
             "via /api/integration; commands are queued here and executed by Unity."
         ),
     )
-    app.state.garage_service = service or GarageStateService()
-    app.state.integration_service = integration or IntegrationService(
-        app.state.garage_service
-    )
+    app.state.garage_service = service or garage_state.GarageStateService()
+    app.state.integration_service = integration or integration_service.IntegrationService(app.state.garage_service)
 
     app.add_middleware(
         CORSMiddleware,
@@ -57,14 +47,12 @@ def create_app(
         expose_headers=["X-Data-Source"],
     )
 
-    @app.exception_handler(NotFoundError)
-    def _not_found(request: Request, exc: NotFoundError) -> JSONResponse:
-        return JSONResponse(
-            status_code=404, content={"success": False, "message": str(exc)}
-        )
+    @app.exception_handler(garage_state.NotFoundError)
+    def _not_found(request: Request, exc: garage_state.NotFoundError) -> JSONResponse:
+        return JSONResponse(status_code=404, content={"success": False, "message": str(exc)})
 
-    @app.exception_handler(UnityOfflineError)
-    def _offline(request: Request, exc: UnityOfflineError) -> JSONResponse:
+    @app.exception_handler(integration_service.UnityOfflineError)
+    def _offline(request: Request, exc: integration_service.UnityOfflineError) -> JSONResponse:
         source = request.app.state.integration_service.data_source().value
         state = request.app.state.garage_service.last_known_state()
         return JSONResponse(
@@ -77,8 +65,8 @@ def create_app(
             },
         )
 
-    @app.exception_handler(StaleSnapshotError)
-    def _stale(request: Request, exc: StaleSnapshotError) -> JSONResponse:
+    @app.exception_handler(integration_service.StaleSnapshotError)
+    def _stale(request: Request, exc: integration_service.StaleSnapshotError) -> JSONResponse:
         integ = request.app.state.integration_service
         return JSONResponse(
             status_code=409,
@@ -90,11 +78,9 @@ def create_app(
             },
         )
 
-    @app.exception_handler(SessionMismatchError)
-    def _session(request: Request, exc: SessionMismatchError) -> JSONResponse:
-        return JSONResponse(
-            status_code=409, content={"success": False, "message": str(exc)}
-        )
+    @app.exception_handler(integration_service.SessionMismatchError)
+    def _session(request: Request, exc: integration_service.SessionMismatchError) -> JSONResponse:
+        return JSONResponse(status_code=409, content={"success": False, "message": str(exc)})
 
     for module in (health, garage, spaces, vehicles, simulation, integration_routes):
         app.include_router(module.router)

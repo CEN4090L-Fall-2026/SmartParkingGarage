@@ -2,7 +2,7 @@
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from smart_parking_backend.models.enums import Level, ScenarioMode, VehicleRequestType
+from smart_parking_backend.models import enums
 
 
 class _Command(BaseModel):
@@ -30,12 +30,10 @@ class ResetSimulationCommand(_Command):
 
 
 class SetScenarioModeCommand(_Command):
-    scenario_mode: ScenarioMode
+    scenario_mode: enums.ScenarioMode
 
 
 class SpawnVehicleCommand(_Command):
-    request_type: VehicleRequestType
-    preferred_level: Level | None = Field(
-        default=None, description="Optional level preference: L1-L4."
-    )
+    request_type: enums.VehicleRequestType
+    preferred_level: enums.Level | None = Field(default=None, description="Optional level preference: L1-L4.")
     auto_depart: bool = True

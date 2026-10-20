@@ -7,59 +7,36 @@ reports (plus its own spawn-request records) and serves it to clients.
 
 import threading
 
-from smart_parking_backend.models import (
-    DataSource,
-    GarageSummary,
-    Level,
-    LevelSummary,
-    ParkingSpace,
-    ParkingSpaceState,
-    ParkingSpaceType,
-    ScenarioMode,
-    SimulationReport,
-    SimulationState,
-    SimulationStatus,
-    SpawnRequestStatus,
-    StateCounts,
-    Vehicle,
-    VehicleLifecycleState,
-    VehicleRequestType,
-    VehicleSpawnRequest,
-)
-from smart_parking_backend.services.seed_data import (
-    EV_SPACE_IDS,
-    OUT_OF_SERVICE_SPACE_IDS,
-    SPACE_NUMBERS_BY_LEVEL,
-)
+from smart_parking_backend.models import enums
+from smart_parking_backend.models import parking as parking_models
+from smart_parking_backend.models import simulation as simulation_models
+from smart_parking_backend.models import vehicles as vehicle_models
+from smart_parking_backend.services import seed_data
 
 
 class NotFoundError(Exception):
     """Unknown space, vehicle or request (HTTP 404)."""
 
 
-def _seed_spaces() -> dict[str, ParkingSpace]:
-    ev, oos = set(EV_SPACE_IDS), set(OUT_OF_SERVICE_SPACE_IDS)
-    spaces: dict[str, ParkingSpace] = {}
-    for level, numbers in SPACE_NUMBERS_BY_LEVEL.items():
+def _seed_spaces() -> dict[str, parking_models.ParkingSpace]:
+    ev, oos = set(seed_data.EV_SPACE_IDS), set(seed_data.OUT_OF_SERVICE_SPACE_IDS)
+    spaces: dict[str, parking_models.ParkingSpace] = {}
+    for level, numbers in seed_data.SPACE_NUMBERS_BY_LEVEL.items():
         for number in numbers:
             space_id = f"{level}_SPACE_{number:03d}"
-            spaces[space_id] = ParkingSpace(
+            spaces[space_id] = parking_models.ParkingSpace(
                 space_id=space_id,
-                level=Level(level),
-                state=ParkingSpaceState.OUT_OF_SERVICE
-                if space_id in oos
-                else ParkingSpaceState.AVAILABLE,
-                space_type=ParkingSpaceType.EV
-                if space_id in ev
-                else ParkingSpaceType.STANDARD,
+                level=enums.Level(level),
+                state=enums.ParkingSpaceState.OUT_OF_SERVICE if space_id in oos else enums.ParkingSpaceState.AVAILABLE,
+                space_type=enums.ParkingSpaceType.EV if space_id in ev else enums.ParkingSpaceType.STANDARD,
             )
     return spaces
 
 
-def _idle_report() -> SimulationReport:
-    return SimulationReport(
-        state=SimulationState.IDLE,
-        scenario_mode=ScenarioMode.NORMAL,
+def _idle_report() -> simulation_models.SimulationReport:
+    return simulation_models.SimulationReport(
+        state=enums.SimulationState.IDLE,
+        scenario_mode=enums.ScenarioMode.NORMAL,
         elapsed_seconds=0,
         total_spawned=0,
         total_completed=0,
@@ -72,18 +49,18 @@ def _idle_report() -> SimulationReport:
 class GarageStateService:
     def __init__(self) -> None:
         self._lock = threading.RLock()
-        self._spaces: dict[str, ParkingSpace] = _seed_spaces()
-        self._vehicles: dict[str, Vehicle] = {}
-        self._report: SimulationReport = _idle_report()
-        self._spawn_requests: dict[str, VehicleSpawnRequest] = {}
+        self._spaces: dict[str, parking_models.ParkingSpace] = _seed_spaces()
+        self._vehicles: dict[str, vehicle_models.Vehicle] = {}
+        self._report: simulation_models.SimulationReport = _idle_report()
+        self._spawn_requests: dict[str, vehicle_models.VehicleSpawnRequest] = {}
         self._request_sequence = 0
 
     # ---- projection updates (called by IntegrationService) ---------------------------------------------------
     def apply_live(
         self,
-        report: SimulationReport,
-        spaces: list[ParkingSpace],
-        vehicles: list[Vehicle],
+        report: simulation_models.SimulationReport,
+        spaces: list[parking_models.ParkingSpace],
+        vehicles: list[vehicle_models.Vehicle],
     ) -> None:
         """Replace the whole projection with what Unity reported. There is deliberately no merge with the seed."""
         with self._lock:
@@ -93,37 +70,32 @@ class GarageStateService:
 
     # ---- queries ---------------------------------------------------------------------------------------------
     @staticmethod
-    def _counts(spaces: list[ParkingSpace]) -> dict:
-        def n(state: ParkingSpaceState) -> int:
+    def _counts(spaces: list[parking_models.ParkingSpace]) -> dict:
+        def n(state: enums.ParkingSpaceState) -> int:
             return sum(1 for s in spaces if s.state == state)
 
-        oos = n(ParkingSpaceState.OUT_OF_SERVICE)
+        oos = n(enums.ParkingSpaceState.OUT_OF_SERVICE)
         return {
             "total": len(spaces),
             "operational": len(spaces) - oos,
-            "available": n(ParkingSpaceState.AVAILABLE),
-            "occupied": n(ParkingSpaceState.OCCUPIED),
-            "reserved": n(ParkingSpaceState.RESERVED),
+            "available": n(enums.ParkingSpaceState.AVAILABLE),
+            "occupied": n(enums.ParkingSpaceState.OCCUPIED),
+            "reserved": n(enums.ParkingSpaceState.RESERVED),
             "out_of_service": oos,
         }
 
     def garage_summary(
-        self, data_source: DataSource = DataSource.SEEDED_BASELINE
-    ) -> GarageSummary:
+        self, data_source: enums.DataSource = enums.DataSource.SEEDED_BASELINE
+    ) -> parking_models.GarageSummary:
         with self._lock:
             spaces = list(self._spaces.values())
-            total = StateCounts(**self._counts(spaces))
+            total = parking_models.StateCounts(**self._counts(spaces))
             levels = [
-                LevelSummary(
-                    level=level, **self._counts([s for s in spaces if s.level == level])
-                )
-                for level in Level
+                parking_models.LevelSummary(level=level, **self._counts([s for s in spaces if s.level == level]))
+                for level in enums.Level
             ]
-            by_type = {
-                t.value: sum(1 for s in spaces if s.space_type == t)
-                for t in ParkingSpaceType
-            }
-            return GarageSummary(
+            by_type = {t.value: sum(1 for s in spaces if s.space_type == t) for t in enums.ParkingSpaceType}
+            return parking_models.GarageSummary(
                 total_physical_spaces=total.total,
                 operational_spaces=total.operational,
                 available=total.available,
@@ -137,10 +109,10 @@ class GarageStateService:
 
     def list_spaces(
         self,
-        level: Level | None = None,
-        state: ParkingSpaceState | None = None,
-        space_type: ParkingSpaceType | None = None,
-    ) -> list[ParkingSpace]:
+        level: enums.Level | None = None,
+        state: enums.ParkingSpaceState | None = None,
+        space_type: enums.ParkingSpaceType | None = None,
+    ) -> list[parking_models.ParkingSpace]:
         with self._lock:
             return [
                 s.model_copy()
@@ -150,16 +122,14 @@ class GarageStateService:
                 and (space_type is None or s.space_type == space_type)
             ]
 
-    def get_space(self, space_id: str) -> ParkingSpace:
+    def get_space(self, space_id: str) -> parking_models.ParkingSpace:
         with self._lock:
             space = self._spaces.get(space_id)
             if space is None:
                 raise NotFoundError(f"Parking space '{space_id}' does not exist.")
             return space.model_copy()
 
-    def list_vehicles(
-        self, lifecycle_state: VehicleLifecycleState | None = None
-    ) -> list[Vehicle]:
+    def list_vehicles(self, lifecycle_state: enums.VehicleLifecycleState | None = None) -> list[vehicle_models.Vehicle]:
         with self._lock:
             return [
                 v.model_copy()
@@ -167,26 +137,24 @@ class GarageStateService:
                 if lifecycle_state is None or v.lifecycle_state == lifecycle_state
             ]
 
-    def get_vehicle(self, vehicle_id: str) -> Vehicle:
+    def get_vehicle(self, vehicle_id: str) -> vehicle_models.Vehicle:
         with self._lock:
             vehicle = self._vehicles.get(vehicle_id)
             if vehicle is None:
-                raise NotFoundError(
-                    f"Vehicle '{vehicle_id}' does not exist in the backend."
-                )
+                raise NotFoundError(f"Vehicle '{vehicle_id}' does not exist in the backend.")
             return vehicle.model_copy()
 
     def simulation_status(
-        self, data_source: DataSource = DataSource.SEEDED_BASELINE
-    ) -> SimulationStatus:
+        self, data_source: enums.DataSource = enums.DataSource.SEEDED_BASELINE
+    ) -> simulation_models.SimulationStatus:
         with self._lock:
             counts = self._counts(list(self._spaces.values()))
             r = self._report
             open_states = (
-                SpawnRequestStatus.ACCEPTED_BY_BACKEND,
-                SpawnRequestStatus.FORWARDED_TO_UNITY,
+                enums.SpawnRequestStatus.ACCEPTED_BY_BACKEND,
+                enums.SpawnRequestStatus.FORWARDED_TO_UNITY,
             )
-            return SimulationStatus(
+            return simulation_models.SimulationStatus(
                 state=r.state,
                 scenario_mode=r.scenario_mode,
                 elapsed_seconds=r.elapsed_seconds,
@@ -199,9 +167,7 @@ class GarageStateService:
                 occupied_spaces=counts["occupied"],
                 reserved_spaces=counts["reserved"],
                 out_of_service_spaces=counts["out_of_service"],
-                pending_spawn_requests=sum(
-                    1 for q in self._spawn_requests.values() if q.status in open_states
-                ),
+                pending_spawn_requests=sum(1 for q in self._spawn_requests.values() if q.status in open_states),
                 data_source=data_source,
             )
 
@@ -212,15 +178,15 @@ class GarageStateService:
     # ---- spawn-request records -------------------------------------------------------------------------------
     def create_spawn_request(
         self,
-        request_type: VehicleRequestType,
-        preferred_level: Level | None,
+        request_type: enums.VehicleRequestType,
+        preferred_level: enums.Level | None,
         command_id: str | None = None,
         *,
         auto_depart: bool = True,
-    ) -> VehicleSpawnRequest:
+    ) -> vehicle_models.VehicleSpawnRequest:
         with self._lock:
             self._request_sequence += 1
-            request = VehicleSpawnRequest(
+            request = vehicle_models.VehicleSpawnRequest(
                 request_id=f"REQ_{self._request_sequence:04d}",
                 request_type=request_type,
                 preferred_level=preferred_level,
@@ -236,11 +202,11 @@ class GarageStateService:
             if request is not None:
                 self._spawn_requests[request_id] = request.model_copy(update=fields)
 
-    def list_spawn_requests(self) -> list[VehicleSpawnRequest]:
+    def list_spawn_requests(self) -> list[vehicle_models.VehicleSpawnRequest]:
         with self._lock:
             return [r.model_copy() for r in self._spawn_requests.values()]
 
-    def get_spawn_request(self, request_id: str) -> VehicleSpawnRequest:
+    def get_spawn_request(self, request_id: str) -> vehicle_models.VehicleSpawnRequest:
         with self._lock:
             request = self._spawn_requests.get(request_id)
             if request is None:

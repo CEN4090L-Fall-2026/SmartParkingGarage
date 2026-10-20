@@ -1,4 +1,4 @@
-from .fake_unity import FakeUnity
+from tests import fake_unity
 
 
 def post(client, path, body=None):
@@ -46,9 +46,7 @@ def test_unity_execution_failure_is_recorded(client, unity):
 def test_commands_are_delivered_in_fifo_order(client, unity):
     ids = [
         post(client, "start").json()["command"]["command_id"],
-        post(client, "mode", {"scenario_mode": "RushHour"}).json()["command"][
-            "command_id"
-        ],
+        post(client, "mode", {"scenario_mode": "RushHour"}).json()["command"]["command_id"],
         post(client, "pause-arrivals").json()["command"]["command_id"],
         post(client, "resume-arrivals").json()["command"]["command_id"],
     ]
@@ -61,9 +59,7 @@ def test_commands_are_delivered_in_fifo_order(client, unity):
         unity.ack(item["command_id"], success, message, vehicle_id)
     unity.snapshot()
     simulation = client.get("/api/simulation").json()
-    assert (
-        simulation["state"] == "Running" and simulation["scenario_mode"] == "RushHour"
-    )
+    assert simulation["state"] == "Running" and simulation["scenario_mode"] == "RushHour"
 
 
 def test_acknowledgement_is_idempotent_and_first_result_wins(client, unity):
@@ -77,10 +73,7 @@ def test_acknowledgement_is_idempotent_and_first_result_wins(client, unity):
     assert duplicate.status_code == 200 and duplicate.json()["duplicate"] is True
     assert conflicting.status_code == 200 and conflicting.json()["duplicate"] is True
     result = command(client, command_id)
-    assert (
-        result["status"] == "Acknowledged"
-        and result["result_message"] == recorded_result
-    )
+    assert result["status"] == "Acknowledged" and result["result_message"] == recorded_result
 
 
 def test_offline_commands_and_spawn_do_not_mutate_state(client):
@@ -94,12 +87,7 @@ def test_offline_commands_and_spawn_do_not_mutate_state(client):
         ("mode", {"scenario_mode": "RushHour"}),
     ):
         assert post(client, path, body).status_code == 503
-    assert (
-        client.post(
-            "/api/vehicles/spawn", json={"request_type": "Standard"}
-        ).status_code
-        == 503
-    )
+    assert client.post("/api/vehicles/spawn", json={"request_type": "Standard"}).status_code == 503
     assert client.get("/api/vehicles/spawn-requests").json() == []
     assert client.get("/api/integration/status").json()["pending_commands"] == 0
     simulation = client.get("/api/simulation").json()
@@ -107,9 +95,7 @@ def test_offline_commands_and_spawn_do_not_mutate_state(client):
     assert client.get("/api/garage").json()["total_physical_spaces"] == 414
 
 
-def test_commands_are_rejected_while_disconnected_and_resume_after_snapshot(
-    client, unity, clock
-):
+def test_commands_are_rejected_while_disconnected_and_resume_after_snapshot(client, unity, clock):
     clock.advance(6)
     assert post(client, "start").status_code == 503
     unity.snapshot()
@@ -118,10 +104,7 @@ def test_commands_are_rejected_while_disconnected_and_resume_after_snapshot(
 
 def test_invalid_commands_are_not_queued(client, unity):
     assert post(client, "mode", {"scenario_mode": "Gridlock"}).status_code == 422
-    assert (
-        client.post("/api/vehicles/spawn", json={"request_type": "Truck"}).status_code
-        == 422
-    )
+    assert client.post("/api/vehicles/spawn", json={"request_type": "Truck"}).status_code == 422
     assert client.get("/api/integration/status").json()["pending_commands"] == 0
 
 
@@ -152,9 +135,7 @@ def test_redelivered_command_retains_fifo_position(client, unity, clock):
 
 def test_reset_cancels_undelivered_commands(client, unity):
     first = post(client, "start").json()["command"]["command_id"]
-    second = post(client, "mode", {"scenario_mode": "RushHour"}).json()["command"][
-        "command_id"
-    ]
+    second = post(client, "mode", {"scenario_mode": "RushHour"}).json()["command"]["command_id"]
     reset = post(client, "reset").json()["command"]["command_id"]
     later = post(client, "start").json()["command"]["command_id"]
     assert command(client, first)["status"] == "Cancelled"
@@ -176,16 +157,11 @@ def test_reset_preserves_delivered_command_until_reset_ack(client, unity):
 def test_new_session_cancels_old_session_commands(client, unity):
     command_id = post(client, "start").json()["command"]["command_id"]
     unity.poll()
-    new_unity = FakeUnity(client, session="SESSION_B")
+    new_unity = fake_unity.FakeUnity(client, session="SESSION_B")
     assert new_unity.snapshot().json()["new_session"] is True
     assert command(client, command_id)["status"] == "Cancelled"
     assert client.get("/api/integration/status").json()["pending_commands"] == 0
-    assert (
-        client.get(
-            "/api/integration/commands", params={"unity_session_id": "SESSION_A"}
-        ).status_code
-        == 409
-    )
+    assert client.get("/api/integration/commands", params={"unity_session_id": "SESSION_A"}).status_code == 409
     assert unity.ack(command_id, True).status_code == 409
     assert post(client, "start").json()["command"]["unity_session_id"] == "SESSION_B"
 
@@ -212,9 +188,4 @@ def test_cors_allows_configured_origin_and_rejects_other_origin(client):
 
 def test_obsolete_state_authority_routes_are_absent(client):
     assert client.get("/parking-assignments").status_code == 404
-    assert (
-        client.patch(
-            "/parking-spaces/L1_SPACE_001/state", json={"State": "Occupied"}
-        ).status_code
-        == 404
-    )
+    assert client.patch("/parking-spaces/L1_SPACE_001/state", json={"State": "Occupied"}).status_code == 404

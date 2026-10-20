@@ -6,6 +6,7 @@ from smart_parking_backend.api.deps import get_integration, get_service, tag_dat
 from smart_parking_backend.models import (
     CommandAccepted,
     CommandPayload,
+    CommandType,
     SpawnVehicleCommand,
     Vehicle,
     VehicleLifecycleState,
@@ -74,6 +75,29 @@ def get_spawn_request(
     service: Annotated[GarageStateService, Depends(get_service)],
 ) -> VehicleSpawnRequest:
     return service.get_spawn_request(request_id)
+
+
+@router.post(
+    "/{vehicle_id}/depart",
+    response_model=CommandAccepted,
+    status_code=status.HTTP_202_ACCEPTED,
+    responses={503: {"description": "Unity is not connected."}},
+)
+def request_departure(
+    vehicle_id: str,
+    service: Annotated[GarageStateService, Depends(get_service)],
+    integration: Annotated[IntegrationService, Depends(get_integration)],
+) -> CommandAccepted:
+    """Queue a departure request for Unity; Unity validates and performs the departure."""
+    state = service.last_known_state()
+    queued = integration.enqueue(
+        CommandType.DEPART_VEHICLE, CommandPayload(vehicle_id=vehicle_id)
+    )
+    return CommandAccepted(
+        message="Departure queued for Unity. It has not been executed yet.",
+        current_state=state,
+        command=queued,
+    )
 
 
 @router.get("/{vehicle_id}", response_model=Vehicle)

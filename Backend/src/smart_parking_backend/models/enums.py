@@ -81,6 +81,7 @@ class CommandType(str, Enum):
     RESET_SIMULATION = "ResetSimulation"
     SET_SCENARIO_MODE = "SetScenarioMode"
     SPAWN_VEHICLE = "SpawnVehicle"
+    DEPART_VEHICLE = "DepartVehicle"
 
 
 class CommandErrorCode(str, Enum):

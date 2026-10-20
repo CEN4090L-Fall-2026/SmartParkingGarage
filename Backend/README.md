@@ -56,9 +56,10 @@ open for the old session are cancelled. If the backend restarts (`backend_instan
 (default 5) old. Query endpoints always answer and carry an `X-Data-Source` header (`SeededBaseline`, `UnityLive`,
 `UnityLastKnown`); the garage and simulation bodies carry the same `data_source` field.
 
-**Commands.** `POST /api/simulation/{start,pause-arrivals,resume-arrivals,drain,reset,mode}` and `POST /api/vehicles/spawn`
-**queue** a command and return **202** (queued, not executed). The simulation state changes only when Unity executes it
-and the next snapshot reports it. Poll `GET /api/integration/commands/{command_id}` for the outcome.
+**Commands.** `POST /api/simulation/{start,pause-arrivals,resume-arrivals,drain,reset,mode}`, `POST /api/vehicles/spawn`,
+and `POST /api/vehicles/{vehicle_id}/depart` **queue** commands and return **202** (queued, not executed). The
+simulation state and vehicle projection change only when Unity executes a command and a subsequent snapshot reports the
+result. Poll `GET /api/integration/commands/{command_id}` for the command outcome.
 
 - IDs are `CMD_000001`, `CMD_000002`, ... (spawn requests are separately `REQ_0001`...).
 - Status: `Pending -> Delivered -> Acknowledged | Failed`, or `Cancelled`.
@@ -67,6 +68,15 @@ and the next snapshot reports it. Poll `GET /api/integration/commands/{command_i
   nothing; backend state is never changed as if Unity had executed it.
 - **Validation of transitions belongs to Unity.** An invalid command (for example `pause-arrivals` while Idle) is queued
   and Unity acknowledges it as failed (`status: Failed`, with Unity's message).
+- **Individual departure:** the path vehicle ID is sent to Unity as `payload.vehicle_id`. The backend does not check
+  whether that vehicle exists or is ready to depart, and does not change its vehicle or parking-space projection.
+  Unity validates and starts the departure; snapshots report its progress and completion.
+- **Driver parking requests:** SpawnVehicle accepts `payload.auto_depart` (default `true`). Setting it to `false` is
+  forwarded to Unity, which must consume the field to keep the driver-requested vehicle parked. Until that Unity bridge
+  change is made, the backend field alone does not change simulation behavior.
+- **Structured spawn failures:** Unity may include `error_code` in a failed acknowledgement: `GarageFull`, `LevelFull`,
+  `VehicleLimitReached`, or `EntranceBlocked`. The backend records the code on the command and spawn-request result; it
+  does not infer codes from message text.
 - **Delivery is at-least-once.** A delivered command with no ack after `SPG_COMMAND_REDELIVERY_SECONDS` (default 5) is handed
   out again (`delivery_count` increments). Unity remembers processed ids and only re-acknowledges them, never re-executes.
 - **Acks are idempotent:** acknowledging a finished command returns `duplicate: true` and changes nothing; the first result wins.
@@ -85,6 +95,7 @@ and the next snapshot reports it. Poll `GET /api/integration/commands/{command_i
 | GET | `/api/spaces`, `/api/spaces/{space_id}` | filters: `level`, `state`, `space_type`; 404 if unknown |
 | GET | `/api/vehicles`, `/api/vehicles/{vehicle_id}` | active vehicles as Unity reported them |
 | POST | `/api/vehicles/spawn` | 202, queues SpawnVehicle; 503 offline |
+| POST | `/api/vehicles/{vehicle_id}/depart` | 202, queues DepartVehicle for Unity; 503 offline |
 | GET | `/api/vehicles/spawn-requests[/{request_id}]` | spawn request records |
 | GET | `/api/simulation` | status |
 | POST | `/api/simulation/start`, `pause-arrivals`, `resume-arrivals`, `drain`, `reset`, `mode` | 202 queued; 503 offline |

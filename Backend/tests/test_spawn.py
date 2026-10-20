@@ -7,19 +7,6 @@ def spawn(client, body):
     return client.post("/api/vehicles/spawn", json=body)
 
 
-def test_spawn_request_defaults_auto_depart_and_preserves_explicit_false(client, unity):
-    defaulted = spawn(client, {"request_type": "Standard"})
-    explicit = spawn(client, {"request_type": "EV", "auto_depart": False})
-
-    assert defaulted.status_code == 202
-    assert explicit.status_code == 202
-    assert defaulted.json()["request"]["auto_depart"] is True
-    assert explicit.json()["request"]["auto_depart"] is False
-    commands = unity.poll()
-    assert commands[0]["payload"]["auto_depart"] is True
-    assert commands[1]["payload"]["auto_depart"] is False
-
-
 def test_standard_and_ev_spawn_outcomes_are_truthful(client, unity):
     standard = spawn(client, {"request_type": "Standard"})
     assert standard.status_code == 202

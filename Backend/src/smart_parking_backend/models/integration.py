@@ -91,6 +91,9 @@ class CommandPayload(BaseModel):
     request_type: VehicleRequestType | None = None
     preferred_level: Level | None = None
     auto_depart: bool | None = None
+    vehicle_id: str | None = Field(
+        default=None, description="Target vehicle for a DepartVehicle command."
+    )
     spawn_request_id: str | None = None
 
 

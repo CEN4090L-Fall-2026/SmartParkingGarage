@@ -36,6 +36,8 @@ instances and a controllable clock; they do not connect to Unity or a developmen
 
 Docs: <http://127.0.0.1:8000/docs>, `/redoc`, `/openapi.json`.
 
+Dashboard developers: [API quick reference](Frontend_API_Guide.md).
+
 ## Unity <-> backend bridge: REST polling
 
 Polling was chosen over WebSockets because it is stateless, survives either side restarting, needs nothing beyond

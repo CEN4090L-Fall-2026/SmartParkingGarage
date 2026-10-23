@@ -21,6 +21,9 @@ Use JSON bodies with `Content-Type: application/json`. Field names use `snake_ca
 | `/api/vehicles/spawn-requests/{request_id}` | Parking request status, `vehicle_id`, `failure_reason`, `error_code` | — |
 | `/api/vehicles/spawn-requests` | All spawn requests; not scoped to a driver | — |
 | `/api/integration/commands/{command_id}` | Command `status`, `result_message`, `error_code` | — |
+| `/api/cameras` | Camera metadata with separate thumbnail and focused-feed health | — |
+| `/api/cameras/{camera_id}/frame?kind=thumbnail\|focused` | Latest `image/jpeg`; ETag and age/freshness headers | `kind` defaults to `thumbnail` |
+| `/api/cameras/focus` | Current focused camera and lease expiry | — |
 
 ## Send requests
 
@@ -34,6 +37,33 @@ Use JSON bodies with `Content-Type: application/json`. Field names use `snake_ca
 | `/api/simulation/drain` | None | Drain the whole garage, not one vehicle |
 | `/api/simulation/reset` | None | Reset simulation |
 | `/api/simulation/mode` | `{"scenario_mode":"RushHour"}` | Set `Normal` or `RushHour` |
+
+## CCTV
+
+The backend exposes the CCTV transport, but Unity does not yet publish its camera catalog or frames to these endpoints,
+and the dashboard does not yet consume them. The cache is in memory only; frames and focus leases are lost when the
+backend restarts or Unity reports a new session.
+
+| Endpoint | Caller | Contract |
+| --- | --- | --- |
+| `POST /api/integration/cameras` | Unity | Replace the current session's camera catalog. `level` is an integer from 0 to 4 (0 means not level-specific); `thumbnail_interval_seconds` 0 uses a 1-second default. |
+| `POST /api/integration/cameras/{camera_id}/frames` | Unity | Send raw JPEG bytes as `image/jpeg`; query includes `unity_session_id`, `kind`, `sequence`, `captured_at`, `width`, `height`, and `focus_generation` for focused frames. |
+| `GET /api/integration/cameras/control?unity_session_id=...` | Unity | Polls current focus selection and generation. |
+| `POST /api/cameras/{camera_id}/focus` | Dashboard | Start a lease with no body; renew or switch cameras using `{"lease_id":"..."}`. Response includes `lease_id` and `focus_generation`. |
+| `DELETE /api/cameras/focus` | Dashboard | Release with the `X-Focus-Lease-Id` header. |
+
+Only one viewer owns focus at a time. The lease expires after 30 seconds; renew while viewing. Another viewer receives
+**409** until the lease is released or expires. Unity polls the control endpoint and uploads focused frames using the
+returned generation.
+
+Frame reads return the latest JPEG with `ETag`, `X-Unity-Session-Id`, `X-Frame-Sequence`, `X-Captured-At`,
+`X-Frame-Age-Ms`, `X-Feed-Health`, `X-Frame-Width`, and `X-Frame-Height`. Send `If-None-Match` to receive **304**
+when the frame is unchanged. A stale frame remains available as **200** with `X-Feed-Health: Stale`; check age and
+health rather than HTTP success alone. Unknown cameras return **404**; unavailable feeds or feeds without frames
+return **503** with a health code. CORS exposes the frame headers to the dashboard.
+
+The catalog is limited to 32 cameras and each JPEG to 2 MiB. Dashboard clients may read camera data and acquire or
+release focus; only Unity should register catalogs, publish frames, and poll camera control.
 
 ## Values and response handling
 
@@ -58,4 +88,4 @@ Use JSON bodies with `Content-Type: application/json`. Field names use `snake_ca
 
 **Restart:** state is in memory. If `backend_instance_id` changes, clear old command/request tracking; IDs may be reused. There is no authentication or driver-specific request ownership yet.
 
-**Unity integration:** confirm the deployed Unity bridge consumes `auto_depart`, handles `DepartVehicle`, and sends `error_code`. Backend support is implemented; live behavior requires a matching bridge and joint testing. CCTV endpoints are not implemented. Dashboards must not send Unity snapshots, fetch commands for execution, or acknowledge commands.
+**Unity integration:** confirm the deployed Unity bridge consumes `auto_depart`, handles `DepartVehicle`, and sends `error_code`. Backend support is implemented; live behavior requires a matching bridge and joint testing. CCTV backend endpoints are implemented, but Unity publishing and dashboard consumption are not yet integrated. Dashboards must not send Unity snapshots, fetch commands for execution, or acknowledge commands.

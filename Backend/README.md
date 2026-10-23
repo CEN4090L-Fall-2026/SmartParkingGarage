@@ -27,10 +27,12 @@ uv run ruff format --check src tests
 uv run ruff check src tests
 ```
 
-Run one server process: snapshots and command queues are process-local. PostgreSQL, Docker, and a `.env` file are
-not required. Use an available port; the existing Unity baseline bridge targets `http://127.0.0.1:8000`.
-Driver-specific fields and commands require a matching Unity bridge implementation.
-Reloading or restarting the backend clears its state.
+Run one server process: snapshots, command queues, camera frames, and focus leases are process-local. PostgreSQL,
+Docker, and a `.env` file are not required. Use an available port; the existing Unity baseline bridge targets
+`http://127.0.0.1:8000`.
+Driver-specific fields and commands require a matching Unity bridge implementation. CCTV backend endpoints are now
+available, but Unity catalog/frame publishing and dashboard consumption are not yet integrated.
+Reloading or restarting the backend clears its state, including CCTV frames and focus leases.
 
 The development dependencies (pytest, httpx, Ruff) are installed by `uv sync`. The backend tests use isolated app
 instances and a controllable clock; they do not connect to Unity or a development database.
@@ -104,6 +106,37 @@ These endpoints are for the Unity bridge, not dashboard execution:
 
 Status codes: 200 query, 202 command queued, 404 unknown, 409 stale snapshot / wrong session, 422 invalid input, 503 Unity offline.
 CORS allows only `http://localhost:3000`, `http://localhost:5173`, `http://127.0.0.1:3000`, `http://127.0.0.1:5173`.
+
+## CCTV endpoints
+
+The backend keeps a bounded, process-local latest-frame cache. It neither stores video history nor starts Unity capture.
+Unity must register the current camera catalog and publish JPEG frames; the backend endpoints are implemented, but
+the Unity HTTP publisher and dashboard client are not connected yet. Camera and frame state resets when Unity reports a
+new session or the backend restarts.
+
+| Method | Path | Caller | Contract |
+| --- | --- | --- | --- |
+| POST | `/api/integration/cameras` | Unity | Replace the catalog for the current `unity_session_id`; JSON includes `focused_interval_seconds` and camera metadata (`level` is 0-4; 0 means not level-specific; a thumbnail interval of 0 uses the 1-second default). |
+| POST | `/api/integration/cameras/{camera_id}/frames` | Unity | Query carries `unity_session_id`, `kind`, `sequence`, `captured_at`, `width`, `height`, and focused `focus_generation`; raw request body is `image/jpeg`. |
+| GET | `/api/integration/cameras/control?unity_session_id=...` | Unity | Returns the current focused camera and `focus_generation`, plus the backend instance ID. |
+| GET | `/api/cameras` | Dashboard | Camera metadata and separate thumbnail/focused feed status. |
+| GET | `/api/cameras/{camera_id}/frame?kind=thumbnail\|focused` | Dashboard | Latest JPEG; `kind` defaults to `thumbnail`. Supports `If-None-Match` / **304**. |
+| GET | `/api/cameras/focus` | Dashboard | Current focused camera, generation, and lease expiry. |
+| POST | `/api/cameras/{camera_id}/focus` | Dashboard | Acquire focus without a body, or renew/switch by sending `{"lease_id":"..."}`. Returns the lease ID and focus generation. |
+| DELETE | `/api/cameras/focus` | Dashboard | Release focus with `X-Focus-Lease-Id`. |
+
+There is one exclusive focus lease for the whole backend, expiring after 30 seconds. Renew it with the same lease ID
+while viewing; another viewer receives **409** until it is released or expires. Unity polls the control endpoint and
+publishes focused frames with the returned generation. A stale frame remains fetchable with `X-Feed-Health: Stale`;
+consumers should check `X-Frame-Age-Ms` and feed health rather than treating HTTP 200 as proof of freshness.
+
+Unknown cameras return **404**. Disabled feeds, feeds without a frame, and focused feeds that are not selected return
+**503** with `X-Feed-Health` (`Unavailable` or `NoFrame`). Wrong sessions, non-increasing sequences, and focus lease
+conflicts return **409**. `ETag` identifies the Unity session, camera, frame kind, sequence, and focus generation.
+Uploads are limited to 2 MiB per JPEG and 32 cameras per catalog.
+
+`/api/cameras` is read-only for dashboards except for the explicit focus endpoints. Dashboards must not send Unity
+catalogs, publish camera frames, or poll the Unity control endpoint.
 
 ## Stall inventory
 

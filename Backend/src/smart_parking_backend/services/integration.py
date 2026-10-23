@@ -19,7 +19,7 @@ from datetime import UTC, datetime
 from smart_parking_backend.models import enums
 from smart_parking_backend.models import integration as integration_models
 from smart_parking_backend.models import vehicles as vehicle_models
-from smart_parking_backend.services import garage_state
+from smart_parking_backend.services import cctv, garage_state
 
 DEFAULT_TIMEOUT_SECONDS = 5.0
 DEFAULT_REDELIVERY_SECONDS = 5.0
@@ -57,6 +57,8 @@ class IntegrationService:
         redelivery_seconds: float | None = None,
         clock: Callable[[], float] = time.monotonic,
         utcnow: Callable[[], datetime] = lambda: datetime.now(UTC),
+        *,
+        cctv_service: cctv.CCTVService | None = None,
     ) -> None:
         self._garage = garage
         self.timeout_seconds = (
@@ -70,6 +72,7 @@ class IntegrationService:
             else _env_float("SPG_COMMAND_REDELIVERY_SECONDS", DEFAULT_REDELIVERY_SECONDS)
         )
         self._clock = clock
+        self.cctv_service = cctv_service if cctv_service is not None else cctv.CCTVService(clock, utcnow)
         self._utcnow = utcnow
         self._lock = threading.RLock()
         self.backend_instance_id = uuid.uuid4().hex[:12]
@@ -125,6 +128,7 @@ class IntegrationService:
                 self._cancel_open("Unity session ended before this command completed.")
                 self._session_id = snapshot.unity_session_id
                 self._latest_sequence = 0
+                self.cctv_service.reset_for_session(snapshot.unity_session_id)
             elif snapshot.sequence <= self._latest_sequence:
                 raise StaleSnapshotError(
                     f"Stale snapshot: sequence {snapshot.sequence} <= latest accepted {self._latest_sequence}.",

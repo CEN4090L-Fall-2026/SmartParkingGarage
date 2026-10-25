@@ -1,10 +1,14 @@
+import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
+from email.parser import BytesParser
+from email.policy import default
 from threading import Barrier
 
 import httpx
 import pytest
 
+from smart_parking_backend.api.routes import cameras as camera_routes
 from smart_parking_backend.models import cameras as camera_models
 from smart_parking_backend.services.cctv import CameraConflictError
 from tests.fake_unity import FakeUnity
@@ -381,3 +385,217 @@ def test_camera_cors(client, unity, clock):
     assert frame.headers["access-control-allow-origin"] == "http://localhost:5173"
     exposed = frame.headers["access-control-expose-headers"].lower()
     assert "etag" in exposed and "x-frame-age-ms" in exposed and "x-feed-health" in exposed
+
+
+def _collect_focused_stream(client, on_part, *, disconnect=False):
+    async def collect():
+        disconnected = asyncio.Event()
+        request_received = False
+        headers = {}
+        parts = []
+        buffer = bytearray()
+        boundary = None
+
+        async def receive():
+            nonlocal request_received
+            if not request_received:
+                request_received = True
+                return {"type": "http.request", "body": b"", "more_body": False}
+            await disconnected.wait()
+            return {"type": "http.disconnect"}
+
+        async def send(message):
+            nonlocal boundary
+            if message["type"] == "http.response.start":
+                assert message["status"] == 200
+                headers.update(dict(message["headers"]))
+                mime = BytesParser(policy=default).parsebytes(
+                    b"Content-Type: " + headers[b"content-type"] + b"\r\n\r\n"
+                )
+                assert mime.get_content_type() == "multipart/x-mixed-replace"
+                boundary = b"--" + mime.get_boundary().encode("ascii")
+                return
+            buffer.extend(message.get("body", b""))
+            while buffer.startswith(boundary + b"\r\n"):
+                header_end = buffer.find(b"\r\n\r\n")
+                if header_end < 0:
+                    return
+                metadata = BytesParser(policy=default).parsebytes(bytes(buffer[len(boundary) + 2 : header_end]))
+                body_start = header_end + 4
+                body_end = body_start + int(metadata["Content-Length"])
+                if len(buffer) < body_end + 2:
+                    return
+                assert buffer[body_end : body_end + 2] == b"\r\n"
+                parts.append((metadata, bytes(buffer[body_start:body_end])))
+                del buffer[: body_end + 2]
+                on_part(len(parts))
+                if disconnect:
+                    disconnected.set()
+
+        scope = {
+            "type": "http",
+            "asgi": {"version": "3.0", "spec_version": "2.3"},
+            "http_version": "1.1",
+            "method": "GET",
+            "scheme": "http",
+            "path": "/api/cameras/CAM_A/stream",
+            "query_string": b"",
+            "root_path": "",
+            "headers": [],
+            "client": ("testclient", 50000),
+            "server": ("testserver", 80),
+        }
+        await asyncio.wait_for(client.app(scope, receive, send), timeout=5)
+        return headers, parts, bytes(buffer), boundary
+
+    return client.portal.call(collect)
+
+
+def test_focused_stream_requires_a_selected_camera_with_a_frame(client, unity, clock):
+    assert register(client, unity.session, [camera("CAM_A"), camera("CAM_OFF", enabled=False)]).status_code == 204
+    assert client.get("/api/cameras/UNKNOWN/stream").status_code == 404
+    assert client.get("/api/cameras/CAM_OFF/stream").status_code == 503
+    assert post_frame(client, clock, unity.session, "CAM_A").status_code == 204
+    unavailable = client.get("/api/cameras/CAM_A/stream")
+    assert unavailable.status_code == 503 and unavailable.json()["health"] == "Unavailable"
+    assert client.post("/api/cameras/CAM_A/focus").status_code == 200
+    no_frame = client.get("/api/cameras/CAM_A/stream")
+    assert no_frame.status_code == 503 and no_frame.json()["health"] == "NoFrame"
+
+
+def test_focused_stream_sends_multipart_latest_frames_without_a_backlog(client, unity, clock, monkeypatch):
+    monkeypatch.setattr(camera_routes, "_STREAM_POLL_SECONDS", 0)
+    assert register(client, unity.session, [camera("CAM_A")]).status_code == 204
+    lease = client.post("/api/cameras/CAM_A/focus").json()
+    assert (
+        post_frame(
+            client, clock, unity.session, "CAM_A", kind="focused", generation=lease["focus_generation"]
+        ).status_code
+        == 204
+    )
+    clock.advance(0.31)
+    service = client.app.state.cctv_service
+
+    def next_frame(count):
+        if count == 1:
+            renewed = service.acquire_focus("CAM_A", lease["lease_id"])
+            assert renewed.focus_generation == lease["focus_generation"]
+            for sequence in (2, 3):
+                service.publish_frame(
+                    "CAM_A",
+                    camera_models.FrameUpload(
+                        unity_session_id=unity.session,
+                        kind="focused",
+                        sequence=sequence,
+                        captured_at=clock.utcnow(),
+                        width=2,
+                        height=2,
+                        focus_generation=lease["focus_generation"],
+                    ),
+                    JPEG,
+                )
+        else:
+            assert count == 2
+            service.release_focus(lease["lease_id"])
+
+    headers, parts, trailer, boundary = _collect_focused_stream(client, next_frame)
+    assert headers[b"cache-control"] == b"private, no-store"
+    assert [metadata["X-Frame-Sequence"] for metadata, _ in parts] == ["1", "3"]
+    assert [metadata["X-Feed-Health"] for metadata, _ in parts] == ["Stale", "Fresh"]
+    for metadata, data in parts:
+        assert metadata.get_content_type() == "image/jpeg"
+        assert int(metadata["Content-Length"]) == len(JPEG)
+        assert metadata["X-Unity-Session-Id"] == unity.session
+        assert data == JPEG
+    assert trailer == boundary + b"--\r\n"
+
+
+@pytest.mark.parametrize(
+    "transition",
+    ["release", "switch-and-return", "expiry-and-reacquire", "new-session", "removed", "disabled", "non-focusable"],
+)
+def test_focused_stream_ends_when_its_focus_generation_becomes_unavailable(
+    client, unity, clock, monkeypatch, transition
+):
+    monkeypatch.setattr(camera_routes, "_STREAM_POLL_SECONDS", 0)
+    assert register(client, unity.session, [camera("CAM_A"), camera("CAM_B")]).status_code == 204
+    lease = client.post("/api/cameras/CAM_A/focus").json()
+    assert (
+        post_frame(
+            client, clock, unity.session, "CAM_A", kind="focused", generation=lease["focus_generation"]
+        ).status_code
+        == 204
+    )
+    service = client.app.state.cctv_service
+
+    def end_generation(count):
+        assert count == 1
+        session = unity.session
+        replacement = None
+        if transition == "release":
+            service.release_focus(lease["lease_id"])
+        elif transition == "switch-and-return":
+            service.acquire_focus("CAM_B", lease["lease_id"])
+            replacement = service.acquire_focus("CAM_A", lease["lease_id"])
+        elif transition == "expiry-and-reacquire":
+            clock.advance(30)
+            replacement = service.acquire_focus("CAM_A", None)
+        elif transition == "new-session":
+            session = "NEW_CAMERA_SESSION"
+            service.reset_for_session(session)
+            service.replace_catalog(
+                camera_models.CameraCatalogRequest(
+                    unity_session_id=session, focused_interval_seconds=0.1, cameras=[camera("CAM_A")]
+                )
+            )
+            replacement = service.acquire_focus("CAM_A", None)
+        else:
+            definitions = (
+                []
+                if transition == "removed"
+                else [camera("CAM_A", enabled=transition != "disabled", allow_focused=transition != "non-focusable")]
+            )
+            service.replace_catalog(
+                camera_models.CameraCatalogRequest(
+                    unity_session_id=session, focused_interval_seconds=0.1, cameras=definitions
+                )
+            )
+        if replacement is not None:
+            service.publish_frame(
+                "CAM_A",
+                camera_models.FrameUpload(
+                    unity_session_id=session,
+                    kind="focused",
+                    sequence=2,
+                    captured_at=clock.utcnow(),
+                    width=2,
+                    height=2,
+                    focus_generation=replacement.focus_generation,
+                ),
+                JPEG,
+            )
+
+    _, parts, trailer, boundary = _collect_focused_stream(client, end_generation)
+    assert len(parts) == 1 and parts[0][1] == JPEG
+    assert trailer == boundary + b"--\r\n"
+
+
+def test_focused_stream_disconnect_does_not_release_the_viewers_focus(client, unity, clock, monkeypatch):
+    monkeypatch.setattr(camera_routes, "_STREAM_POLL_SECONDS", 0)
+    assert register(client, unity.session, [camera("CAM_A")]).status_code == 204
+    lease = client.post("/api/cameras/CAM_A/focus").json()
+    assert (
+        post_frame(
+            client, clock, unity.session, "CAM_A", kind="focused", generation=lease["focus_generation"]
+        ).status_code
+        == 204
+    )
+    _, parts, _, _ = _collect_focused_stream(client, lambda _: None, disconnect=True)
+    assert len(parts) == 1 and parts[0][1] == JPEG
+    assert client.get("/api/cameras/focus").json()["focus_generation"] == lease["focus_generation"]
+    assert (
+        post_frame(
+            client, clock, unity.session, "CAM_A", kind="focused", sequence=2, generation=lease["focus_generation"]
+        ).status_code
+        == 204
+    )

@@ -121,6 +121,7 @@ new session or the backend restarts.
 | GET | `/api/integration/cameras/control?unity_session_id=...` | Unity | Returns the current focused camera and `focus_generation`, plus the backend instance ID. |
 | GET | `/api/cameras` | Dashboard | Camera metadata and separate thumbnail/focused feed status. |
 | GET | `/api/cameras/{camera_id}/frame?kind=thumbnail\|focused` | Dashboard | Latest JPEG; `kind` defaults to `thumbnail`. Supports `If-None-Match` / **304**. |
+| GET | `/api/cameras/{camera_id}/stream` | Dashboard | Focused MJPEG stream (`multipart/x-mixed-replace; boundary=frame`); requires a selected camera with an existing focused frame. |
 | GET | `/api/cameras/focus` | Dashboard | Current focused camera, generation, and lease expiry. |
 | POST | `/api/cameras/{camera_id}/focus` | Dashboard | Acquire focus without a body, or renew/switch by sending `{"lease_id":"..."}`. Returns the lease ID and focus generation. |
 | DELETE | `/api/cameras/focus` | Dashboard | Release focus with `X-Focus-Lease-Id`. |
@@ -167,10 +168,37 @@ CCTV control/ingest is synchronous: focus acquisition returns **200**, and catal
 **204**. It does not queue a simulation command or return **202**. A focus response is desired capture state, not proof
 that Unity has applied it.
 
-Dashboard clients poll JPEGs for both thumbnails (about 1 Hz) and the focused view (about 10 Hz); MJPEG/WebSocket
-streaming is not implemented. Renew the focus lease every 10 seconds while viewing. The Unity document's alternative
-streaming proposals need to be reconciled with this wire contract by the Unity owner; live Unity/dashboard behavior
-has not been verified.
+Dashboard clients poll thumbnail JPEGs about once per second and use `/api/cameras/{camera_id}/stream` for the focused
+view. Unity still uploads individual JPEGs; it does not upload multipart video. WebSocket/WebRTC transport is not
+implemented. The JPEG endpoint remains available for single-frame reads of either kind.
+
+### Focused MJPEG viewing
+
+1. Acquire focus, retain the returned `lease_id`, and renew it every 10 seconds while viewing.
+2. Poll `/api/cameras` until that camera has a focused frame (`Fresh` or `Stale`, not `NoFrame`/`Unavailable`).
+   Then set the viewer's `<img>` source to `/api/cameras/{camera_id}/stream`. The stream returns **200** with
+   `multipart/x-mixed-replace; boundary=frame`; each part has `Content-Type: image/jpeg`, `Content-Length`, and the
+   same ETag/session/sequence/capture-time/age/health/dimension metadata as a single-frame response.
+3. Continue polling camera status about once per second for health badges. A native `<img>` cannot expose multipart
+   headers to JavaScript, and an open connection is not proof of freshness. The stream sends only newer frames;
+   capture stopping leaves the last image displayed without repeatedly sending the same JPEG.
+4. Switching camera or losing the focus lease ends the old stream. Open a new stream after the new generation's first
+   frame arrives. Remove the image source when the viewer closes, stop lease renewal, and explicitly release focus.
+
+Any viewer may read the selected focused feed without the owner's token. Opening/closing a stream neither acquires,
+renews, nor releases focus. Same-camera lease renewal keeps the stream open. Before streaming starts, unknown cameras
+return **404** and unavailable/no-frame focused feeds return **503** with the existing health response.
+After headers have been sent, lease expiry/release, focus-generation or Unity-session change, and catalog
+removal/disable/focus revocation end the stream rather than returning a new HTTP error. A frame already in flight
+may finish before closure. Normal closure sends the final multipart boundary; client disconnect cancels its reader.
+
+Each reader checks the shared latest-frame cache every 50 ms without holding a lock while sending. Slow readers skip
+superseded frames instead of building a per-viewer frame queue; transport buffers and in-flight images are additional
+to the retained-cache bound. Streaming responses use `Cache-Control: private, no-store` and `X-Accel-Buffering: no`;
+reverse proxies must allow long-lived, unbuffered responses. The stream does not use conditional **304** responses.
+
+This implements the Unity document's JPEG-grid/MJPEG-focused recommendation. Live Unity CCTV/dashboard integration
+still requires the separate publisher and dashboard consumer and has not been verified.
 
 ## Stall inventory
 

@@ -23,6 +23,7 @@ Use JSON bodies with `Content-Type: application/json`. Field names use `snake_ca
 | `/api/integration/commands/{command_id}` | Command `status`, `result_message`, `error_code` | — |
 | `/api/cameras` | Camera metadata with separate thumbnail and focused-feed health | — |
 | `/api/cameras/{camera_id}/frame?kind=thumbnail\|focused` | Latest `image/jpeg`; ETag and age/freshness headers | `kind` defaults to `thumbnail` |
+| `/api/cameras/{camera_id}/stream` | Focused MJPEG (`multipart/x-mixed-replace`) for an `<img>` viewer | Focused only; no frame-kind query |
 | `/api/cameras/focus` | Current focused camera and lease expiry | — |
 
 ## Send requests
@@ -69,10 +70,26 @@ non-`image/jpeg` media types return **415**. Rejected uploads leave the latest f
 The Unity publisher should send effective positive capture intervals; the backend's interval-0 fallback is always
 1 second, even if Unity's configured default changes.
 
-Use non-overlapping JPEG polls for both thumbnails (about 1 Hz) and focused frames (about 10 Hz), updating health
-headers even on **304**. There is no MJPEG/WebSocket endpoint. Keep the returned focus lease ID in the viewer, use it
-to switch/release focus, and stop renewing when the viewer closes. A **409** means another owner or a stale token,
-not a failed camera; do not automatically steal focus.
+Poll thumbnail JPEGs about once per second without overlapping requests, updating health headers even on **304**.
+For focused viewing, acquire focus, wait for `/api/cameras` to report a focused frame, then set the `<img>` source to
+`/api/cameras/{camera_id}/stream`. This is one long-lived MJPEG response, not repeated focused-frame GETs.
+The single-JPEG endpoint remains available for either kind. There is no WebSocket/WebRTC endpoint.
+
+Keep renewing the lease every 10 seconds independently of the stream. Opening or closing the stream does not acquire,
+renew, or release focus, and other viewers can read the same selected feed without the owner's token. Keep the lease
+ID in the controlling viewer, use it to switch/release focus, and stop renewing when the viewer closes. A **409** means
+another owner or a stale token, not a failed camera; do not automatically steal focus.
+
+Continue polling `/api/cameras` about once per second for health badges: a native `<img>` does not expose multipart
+headers, and the connection sends only new frames, not duplicate images or freshness heartbeats. Each part carries a
+JPEG with `Content-Length` and the frame metadata listed above. A stale retained frame can be the first image; an idle
+connection does not prove capture is still running.
+
+Before the stream starts, **404** means unknown camera and **503** means unavailable/no focused frame. After it starts,
+release/expiry, focus-generation or Unity-session changes, and camera removal/disable/focus revocation close it; a
+frame already in flight may finish. Same-camera lease renewal preserves the connection. After switching, open the
+new camera's stream once its first focused frame exists. Remove the old image source on teardown and release focus.
+MJPEG responses are not cached, do not return **304**, and require reverse-proxy buffering to be disabled.
 
 Dashboard clients may read camera data and acquire or release focus; only Unity should register catalogs, publish
 frames, and poll camera control. See the [Unity publisher handoff](../Backend/README.md#unity-publisher-handoff) for

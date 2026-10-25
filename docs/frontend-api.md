@@ -52,9 +52,11 @@ backend restarts or Unity reports a new session.
 | `POST /api/cameras/{camera_id}/focus` | Dashboard | Start a lease with no body; renew or switch cameras using `{"lease_id":"..."}`. Response includes `lease_id` and `focus_generation`. |
 | `DELETE /api/cameras/focus` | Dashboard | Release with the `X-Focus-Lease-Id` header. |
 
-Only one viewer owns focus at a time. The lease expires after 30 seconds; renew while viewing. Another viewer receives
-**409** until the lease is released or expires. Unity polls the control endpoint and uploads focused frames using the
-returned generation.
+Only one viewer owns focus at a time. The lease expires after 30 seconds; renew every 10 seconds while viewing.
+Another viewer receives **409** until the lease is released or expires. Focus acquisition/renewal returns **200**;
+release returns **204**, not a queued simulation-command response. The selection is desired capture state, not
+confirmation that Unity has applied it. Unity polls the control endpoint and associates the returned generation with
+focused work at capture time, then echoes it on upload; it must not relabel older frames with a newer generation.
 
 Frame reads return the latest JPEG with `ETag`, `X-Unity-Session-Id`, `X-Frame-Sequence`, `X-Captured-At`,
 `X-Frame-Age-Ms`, `X-Feed-Health`, `X-Frame-Width`, and `X-Frame-Height`. Send `If-None-Match` to receive **304**
@@ -62,8 +64,19 @@ when the frame is unchanged. A stale frame remains available as **200** with `X-
 health rather than HTTP success alone. Unknown cameras return **404**; unavailable feeds or feeds without frames
 return **503** with a health code. CORS exposes the frame headers to the dashboard.
 
-The catalog is limited to 32 cameras and each JPEG to 2 MiB. Dashboard clients may read camera data and acquire or
-release focus; only Unity should register catalogs, publish frames, and poll camera control.
+The catalog is limited to 32 cameras and each JPEG to 2 MiB. Uploads over that limit return **413**; missing or
+non-`image/jpeg` media types return **415**. Rejected uploads leave the latest frame and sequence unchanged.
+The Unity publisher should send effective positive capture intervals; the backend's interval-0 fallback is always
+1 second, even if Unity's configured default changes.
+
+Use non-overlapping JPEG polls for both thumbnails (about 1 Hz) and focused frames (about 10 Hz), updating health
+headers even on **304**. There is no MJPEG/WebSocket endpoint. Keep the returned focus lease ID in the viewer, use it
+to switch/release focus, and stop renewing when the viewer closes. A **409** means another owner or a stale token,
+not a failed camera; do not automatically steal focus.
+
+Dashboard clients may read camera data and acquire or release focus; only Unity should register catalogs, publish
+frames, and poll camera control. See the [Unity publisher handoff](../Backend/README.md#unity-publisher-handoff) for
+the adapter sequence. These APIs have no authentication and are intended for trusted local/demo use.
 
 ## Values and response handling
 

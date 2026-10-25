@@ -133,10 +133,44 @@ consumers should check `X-Frame-Age-Ms` and feed health rather than treating HTT
 Unknown cameras return **404**. Disabled feeds, feeds without a frame, and focused feeds that are not selected return
 **503** with `X-Feed-Health` (`Unavailable` or `NoFrame`). Wrong sessions, non-increasing sequences, and focus lease
 conflicts return **409**. `ETag` identifies the Unity session, camera, frame kind, sequence, and focus generation.
-Uploads are limited to 2 MiB per JPEG and 32 cameras per catalog.
+Uploads are limited to 2 MiB per JPEG and 32 cameras per catalog. Oversized uploads return **413**, checked against
+`Content-Length` before reading when supplied and against received bytes while streaming. Missing or non-`image/jpeg`
+content types return **415**; MIME parameters are allowed. Rejected uploads do not replace the latest frame or advance
+its sequence. The backend does not decode or validate JPEG content.
 
 `/api/cameras` is read-only for dashboards except for the explicit focus endpoints. Dashboards must not send Unity
 catalogs, publish camera frames, or poll the Unity control endpoint.
+
+### Unity publisher handoff
+
+These backend APIs are implemented; the missing integration is the Unity HTTP publisher/control adapter. Browse
+`/docs` or fetch `/openapi.json` for the public request/response schemas. They are trusted local/demo APIs without
+authentication, not endpoints to expose directly to the internet.
+
+1. Publish an ordinary garage snapshot to establish `unity_session_id`, then register the catalog. Send numeric
+   camera levels 0-4 and category names (`Exterior`, `City`, `Entrance`, `Exit`, `ParkingLevel`, `Ramp`, `EV`).
+   Send effective positive capture intervals: thumbnail interval 0 uses the backend's fixed 1-second default,
+   which will not follow a changed Unity capture setting automatically.
+2. Start Unity capture. The current scene has `captureOnStart` off; accepting a catalog does not start capture.
+   Upload each latest JPEG independently of garage snapshots, using `kind=thumbnail` or `kind=focused`, per-camera/kind
+   increasing sequences, render-time UTC `captured_at`, and the frame's actual dimensions. Map Unity's
+   `Thumbnail`/`Focused` enum names to the lowercase wire values. Keep at most one upload in flight per camera/kind;
+   skip superseded frames rather than building a backlog.
+3. Poll camera control about every 0.5 seconds. Apply a non-null selection with `SetFocusedCamera`; clear it with
+   `ClearFocusedCamera` when null. Tag focused capture work with the returned `focus_generation` at capture time and
+   echo it on upload. Never relabel old frames using the generation current at upload time, even for the same camera.
+   Unity's current `CCTVFrame` has no generation field, so capture-time association is part of the Unity integration.
+4. On a session change or backend restart, re-establish the ordinary snapshot session and republish the catalog.
+   A **409** for an obsolete focus generation requires reading current control, not retrying the old frame.
+
+CCTV control/ingest is synchronous: focus acquisition returns **200**, and catalog/frame acceptance or release returns
+**204**. It does not queue a simulation command or return **202**. A focus response is desired capture state, not proof
+that Unity has applied it.
+
+Dashboard clients poll JPEGs for both thumbnails (about 1 Hz) and the focused view (about 10 Hz); MJPEG/WebSocket
+streaming is not implemented. Renew the focus lease every 10 seconds while viewing. The Unity document's alternative
+streaming proposals need to be reconciled with this wire contract by the Unity owner; live Unity/dashboard behavior
+has not been verified.
 
 ## Stall inventory
 

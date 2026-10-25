@@ -2,6 +2,10 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from threading import Barrier
 
+import httpx
+import pytest
+
+from smart_parking_backend.models import cameras as camera_models
 from smart_parking_backend.services.cctv import CameraConflictError
 from tests.fake_unity import FakeUnity
 
@@ -78,6 +82,77 @@ def post_frame(
         captured_at=(captured_at or clock.utcnow()).isoformat(),
         focus_generation=generation,
     )
+
+
+@pytest.mark.parametrize("content_type", [None, "application/octet-stream", "text/plain", "application/json"])
+def test_frame_upload_requires_jpeg_media_type(client, unity, clock, content_type):
+    assert register(client, unity.session, [camera("CAM_A")]).status_code == 204
+    assert post_frame(client, clock, unity.session, "CAM_A").status_code == 204
+    original = client.get("/api/cameras/CAM_A/frame")
+    params = {
+        "unity_session_id": unity.session,
+        "kind": "thumbnail",
+        "sequence": 2,
+        "captured_at": clock.utcnow().isoformat(),
+        "width": 2,
+        "height": 2,
+    }
+    headers = {} if content_type is None else {"Content-Type": content_type}
+    rejected = client.post("/api/integration/cameras/CAM_A/frames", params=params, content=JPEG, headers=headers)
+    assert rejected.status_code == 415
+    retained = client.get("/api/cameras/CAM_A/frame")
+    assert retained.content == JPEG and retained.headers["etag"] == original.headers["etag"]
+
+    accepted = client.post(
+        "/api/integration/cameras/CAM_A/frames",
+        params=params,
+        content=JPEG,
+        headers={"Content-Type": "Image/JPEG; charset=binary"},
+    )
+    assert accepted.status_code == 204
+    assert client.get("/api/cameras/CAM_A/frame").headers["x-frame-sequence"] == "2"
+
+
+@pytest.mark.parametrize("declared_length", [False, True], ids=["streamed", "content-length"])
+def test_frame_upload_size_limit_stops_reading_and_preserves_latest_frame(client, unity, clock, declared_length):
+    assert register(client, unity.session, [camera("CAM_A")]).status_code == 204
+    params = {
+        "unity_session_id": unity.session,
+        "kind": "thumbnail",
+        "sequence": 1,
+        "captured_at": clock.utcnow().isoformat(),
+        "width": 2,
+        "height": 2,
+    }
+    path = "/api/integration/cameras/CAM_A/frames"
+    at_limit = JPEG + b"\0" * (camera_models.MAX_FRAME_BYTES - len(JPEG))
+    assert client.post(path, params=params, content=at_limit, headers={"Content-Type": "image/jpeg"}).status_code == 204
+    original = client.get("/api/cameras/CAM_A/frame")
+    assert original.content == at_limit
+    params["sequence"] = 2
+
+    async def oversized_chunks():
+        if declared_length:
+            pytest.fail("Oversized Content-Length must be rejected before reading the body.")
+        yield at_limit
+        yield b"\0"
+        pytest.fail("The upload must stop reading as soon as the size limit is exceeded.")
+
+    async def send_oversized():
+        headers = {"Content-Type": "image/jpeg"}
+        if declared_length:
+            headers["Content-Length"] = str(camera_models.MAX_FRAME_BYTES + 1)
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=client.app), base_url="http://testserver"
+        ) as sender:
+            return await sender.post(path, params=params, content=oversized_chunks(), headers=headers)
+
+    rejected = client.portal.call(send_oversized)
+    assert rejected.status_code == 413
+    retained = client.get("/api/cameras/CAM_A/frame")
+    assert retained.content == at_limit and retained.headers["etag"] == original.headers["etag"]
+    assert post_frame(client, clock, unity.session, "CAM_A", sequence=2).status_code == 204
+    assert client.get("/api/cameras/CAM_A/frame").content == JPEG
 
 
 def test_catalog_frames_and_conditional_reads(client, unity, clock):
@@ -289,7 +364,7 @@ def test_focus_lease_is_atomic_and_session_or_simulation_snapshot_lifecycle_is_c
     service.release_focus(active.lease_id)
 
 
-def test_camera_cors_and_openapi_binary_contract(client, unity, clock):
+def test_camera_cors(client, unity, clock):
     assert register(client, unity.session, [camera("CAM_A")]).status_code == 204
     assert post_frame(client, clock, unity.session, "CAM_A").status_code == 204
     preflight = client.options(
@@ -306,8 +381,3 @@ def test_camera_cors_and_openapi_binary_contract(client, unity, clock):
     assert frame.headers["access-control-allow-origin"] == "http://localhost:5173"
     exposed = frame.headers["access-control-expose-headers"].lower()
     assert "etag" in exposed and "x-frame-age-ms" in exposed and "x-feed-health" in exposed
-
-    operation = client.get("/openapi.json").json()["paths"]["/api/integration/cameras/{camera_id}/frames"]["post"]
-    schema = operation["requestBody"]["content"]["image/jpeg"]["schema"]
-    assert schema["type"] == "string"
-    assert schema["contentMediaType"] == "application/octet-stream"

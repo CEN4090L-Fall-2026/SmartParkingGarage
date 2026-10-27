@@ -5,7 +5,8 @@ Team repository: <https://github.com/CEN4090L-Fall-2026/SmartParkingGarage>.
 ## Backend
 
 The FastAPI backend lives in [`Backend/`](Backend/). It exposes Unity-reported garage state and queues
-commands for Unity; assignments and vehicle movement remain Unity-owned. State is currently in memory.
+commands for Unity; assignments and vehicle movement remain Unity-owned. PostgreSQL persists requests, command outcomes,
+session metadata, and the latest snapshot. CCTV frames and focus leases remain process-local.
 
 ## Documentation
 

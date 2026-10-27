@@ -56,7 +56,7 @@ def get_command(
     command_id: str,
     integration: Annotated[integration_service.IntegrationService, Depends(deps.get_integration)],
 ) -> integration_models.BackendCommand:
-    """Outcome of one queued command (Pending, Delivered, Acknowledged, Failed or Cancelled)."""
+    """Command record; OutcomeUnknown is terminal delivery without confirmed execution."""
     return integration.get_command(command_id)
 
 

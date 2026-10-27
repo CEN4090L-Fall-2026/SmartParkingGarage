@@ -60,7 +60,7 @@ class IntegrationStatus(BaseModel):
     seconds_since_last_update: float | None = None
     timeout_seconds: float
     data_source: enums.DataSource
-    pending_commands: int = Field(description="Commands not yet acknowledged, cancelled or failed.")
+    pending_commands: int = Field(description="Commands still Pending or Delivered; unknown outcomes are not pending.")
     backend_instance_id: str
 
 
@@ -82,11 +82,16 @@ class BackendCommand(BaseModel):
     command_type: enums.CommandType
     created_at: datetime
     payload: CommandPayload = Field(default_factory=CommandPayload)
-    status: enums.CommandStatus = enums.CommandStatus.PENDING
+    status: enums.CommandStatus = Field(
+        default=enums.CommandStatus.PENDING,
+        description="OutcomeUnknown is terminal: delivered, but execution could not be confirmed.",
+    )
     unity_session_id: str = Field(description="The Unity session this command was queued for.")
     delivery_count: int = 0
     delivered_at: datetime | None = None
-    acknowledged_at: datetime | None = None
+    acknowledged_at: datetime | None = Field(
+        default=None, description="Receipt time of an actual Unity success/failure acknowledgement."
+    )
     result_message: str | None = None
     vehicle_id: str | None = Field(default=None, description="SpawnVehicle only: the vehicle Unity created.")
     error_code: enums.CommandErrorCode | None = None

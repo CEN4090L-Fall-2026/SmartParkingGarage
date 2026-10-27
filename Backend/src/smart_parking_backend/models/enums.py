@@ -59,6 +59,7 @@ class SpawnRequestStatus(str, Enum):
     FORWARDED_TO_UNITY = "ForwardedToUnity"  # Unity has fetched the command
     SPAWNED_IN_UNITY = "SpawnedInUnity"  # Unity acknowledged that it spawned the vehicle
     FAILED = "Failed"  # Unity rejected it, or it was cancelled before execution
+    OUTCOME_UNKNOWN = "OutcomeUnknown"  # delivered, but session ended before execution was confirmed
 
 
 class DataSource(str, Enum):
@@ -93,3 +94,4 @@ class CommandStatus(str, Enum):
     ACKNOWLEDGED = "Acknowledged"  # Unity executed it successfully
     FAILED = "Failed"  # Unity rejected it or could not execute it
     CANCELLED = "Cancelled"  # made obsolete by a reset or by the Unity session ending
+    OUTCOME_UNKNOWN = "OutcomeUnknown"  # delivered without an acknowledgement before restart/session end

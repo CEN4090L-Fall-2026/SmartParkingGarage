@@ -1,0 +1,21 @@
+name: smart-parking-backend
+
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_DB: smart_parking
+      POSTGRES_USER: smart_parking
+      POSTGRES_PASSWORD: smart_parking_dev
+    ports:
+      - "127.0.0.1:${SPG_POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U smart_parking -d smart_parking"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+
+volumes:
+  postgres_data:

@@ -142,7 +142,7 @@ def test_departure_redelivers_and_old_session_cannot_acknowledge(client, unity, 
     new_unity = fake_unity.FakeUnity(client, session="SESSION_B")
     assert new_unity.snapshot().status_code == 200
     result = client.get(f"/api/integration/commands/{command_id}").json()
-    assert result["status"] == "Cancelled"
+    assert result["status"] == "OutcomeUnknown"
     assert result["payload"]["vehicle_id"] == "DRIVER_A"
     assert unity.ack(command_id, True, "Late old-session ack.").status_code == 409
     assert client.get(f"/api/integration/commands/{command_id}").json() == result

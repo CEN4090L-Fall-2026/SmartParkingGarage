@@ -21,6 +21,8 @@ class VehicleSpawnRequest(BaseModel):
 
     AcceptedByBackend means ONLY that the backend stored it and queued the command. `forwarded_to_unity` turns true
     when Unity fetches the command, and `spawned_in_unity` (with `vehicle_id`) only when Unity acknowledges success.
+    OutcomeUnknown means delivery occurred but execution was not confirmed before restart/session end. A false
+    `spawned_in_unity` means no confirmed successful spawn, not proof that no vehicle exists.
     """
 
     request_id: str = Field(examples=["REQ_0001"])

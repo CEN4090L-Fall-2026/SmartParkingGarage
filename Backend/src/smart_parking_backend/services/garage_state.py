@@ -12,6 +12,7 @@ from smart_parking_backend.models import parking as parking_models
 from smart_parking_backend.models import simulation as simulation_models
 from smart_parking_backend.models import vehicles as vehicle_models
 from smart_parking_backend.services import seed_data
+from smart_parking_backend.storage.repository import PostgresRepository
 
 
 class NotFoundError(Exception):
@@ -47,13 +48,12 @@ def _idle_report() -> simulation_models.SimulationReport:
 
 
 class GarageStateService:
-    def __init__(self) -> None:
+    def __init__(self, repository: PostgresRepository) -> None:
+        self._repository = repository
         self._lock = threading.RLock()
         self._spaces: dict[str, parking_models.ParkingSpace] = _seed_spaces()
         self._vehicles: dict[str, vehicle_models.Vehicle] = {}
         self._report: simulation_models.SimulationReport = _idle_report()
-        self._spawn_requests: dict[str, vehicle_models.VehicleSpawnRequest] = {}
-        self._request_sequence = 0
 
     # ---- projection updates (called by IntegrationService) ---------------------------------------------------
     def apply_live(
@@ -148,12 +148,8 @@ class GarageStateService:
         self, data_source: enums.DataSource = enums.DataSource.SEEDED_BASELINE
     ) -> simulation_models.SimulationStatus:
         with self._lock:
-            counts = self._counts(list(self._spaces.values()))
             r = self._report
-            open_states = (
-                enums.SpawnRequestStatus.ACCEPTED_BY_BACKEND,
-                enums.SpawnRequestStatus.FORWARDED_TO_UNITY,
-            )
+            counts = self._counts(list(self._spaces.values()))
             return simulation_models.SimulationStatus(
                 state=r.state,
                 scenario_mode=r.scenario_mode,
@@ -167,7 +163,7 @@ class GarageStateService:
                 occupied_spaces=counts["occupied"],
                 reserved_spaces=counts["reserved"],
                 out_of_service_spaces=counts["out_of_service"],
-                pending_spawn_requests=sum(1 for q in self._spawn_requests.values() if q.status in open_states),
+                pending_spawn_requests=self._repository.pending_spawn_request_count(),
                 data_source=data_source,
             )
 
@@ -175,40 +171,11 @@ class GarageStateService:
         with self._lock:
             return self._report.state.value
 
-    # ---- spawn-request records -------------------------------------------------------------------------------
-    def create_spawn_request(
-        self,
-        request_type: enums.VehicleRequestType,
-        preferred_level: enums.Level | None,
-        command_id: str | None = None,
-        *,
-        auto_depart: bool = True,
-    ) -> vehicle_models.VehicleSpawnRequest:
-        with self._lock:
-            self._request_sequence += 1
-            request = vehicle_models.VehicleSpawnRequest(
-                request_id=f"REQ_{self._request_sequence:04d}",
-                request_type=request_type,
-                preferred_level=preferred_level,
-                auto_depart=auto_depart,
-                command_id=command_id,
-            )
-            self._spawn_requests[request.request_id] = request
-            return request.model_copy()
-
-    def update_spawn_request(self, request_id: str, **fields) -> None:
-        with self._lock:
-            request = self._spawn_requests.get(request_id)
-            if request is not None:
-                self._spawn_requests[request_id] = request.model_copy(update=fields)
-
     def list_spawn_requests(self) -> list[vehicle_models.VehicleSpawnRequest]:
-        with self._lock:
-            return [r.model_copy() for r in self._spawn_requests.values()]
+        return self._repository.list_spawn_requests()
 
     def get_spawn_request(self, request_id: str) -> vehicle_models.VehicleSpawnRequest:
-        with self._lock:
-            request = self._spawn_requests.get(request_id)
-            if request is None:
-                raise NotFoundError(f"Spawn request '{request_id}' does not exist.")
-            return request.model_copy()
+        request = self._repository.get_spawn_request(request_id)
+        if request is None:
+            raise NotFoundError(f"Spawn request '{request_id}' does not exist.")
+        return request

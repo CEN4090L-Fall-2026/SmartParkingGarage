@@ -37,9 +37,9 @@ def test_queue_fetch_ack_and_snapshot(client, unity):
 
 
 def test_unity_execution_failure_is_recorded(client, unity):
-    post(client, "pause-arrivals")
-    assert unity.step() == ["CMD_000001"]
-    assert command(client, "CMD_000001")["status"] == "Failed"
+    command_id = post(client, "pause-arrivals").json()["command"]["command_id"]
+    assert unity.step() == [command_id]
+    assert command(client, command_id)["status"] == "Failed"
     assert client.get("/api/simulation").json()["state"] == "Idle"
 
 
@@ -109,7 +109,7 @@ def test_invalid_commands_are_not_queued(client, unity):
 
 
 def test_redelivery_and_unity_deduplication(client, unity, clock):
-    post(client, "start")
+    command_id = post(client, "start").json()["command"]["command_id"]
     first = unity.poll()
     assert [item["delivery_count"] for item in first] == [1]
     clock.advance(4.9)
@@ -118,19 +118,19 @@ def test_redelivery_and_unity_deduplication(client, unity, clock):
     assert unity.poll()[0]["delivery_count"] == 2
     unity.processed.clear()
     clock.advance(6)
-    assert unity.step() == ["CMD_000001"]
+    assert unity.step() == [command_id]
     clock.advance(6)
     assert unity.step() == []
-    assert unity.executions == ["CMD_000001"]
+    assert unity.executions == [command_id]
     assert client.get("/api/simulation").json()["state"] == "Running"
 
 
 def test_redelivered_command_retains_fifo_position(client, unity, clock):
-    post(client, "start")
+    first = post(client, "start").json()["command"]["command_id"]
     unity.poll()
-    post(client, "mode", {"scenario_mode": "RushHour"})
+    second = post(client, "mode", {"scenario_mode": "RushHour"}).json()["command"]["command_id"]
     clock.advance(6)
-    assert [item["command_id"] for item in unity.poll()] == ["CMD_000001", "CMD_000002"]
+    assert [item["command_id"] for item in unity.poll()] == [first, second]
 
 
 def test_reset_cancels_undelivered_commands(client, unity):
@@ -154,12 +154,12 @@ def test_reset_preserves_delivered_command_until_reset_ack(client, unity):
     assert command(client, reset)["status"] == "Acknowledged"
 
 
-def test_new_session_cancels_old_session_commands(client, unity):
+def test_new_session_leaves_delivered_execution_unknown(client, unity):
     command_id = post(client, "start").json()["command"]["command_id"]
     unity.poll()
     new_unity = fake_unity.FakeUnity(client, session="SESSION_B")
     assert new_unity.snapshot().json()["new_session"] is True
-    assert command(client, command_id)["status"] == "Cancelled"
+    assert command(client, command_id)["status"] == "OutcomeUnknown"
     assert client.get("/api/integration/status").json()["pending_commands"] == 0
     assert client.get("/api/integration/commands", params={"unity_session_id": "SESSION_A"}).status_code == 409
     assert unity.ack(command_id, True).status_code == 409

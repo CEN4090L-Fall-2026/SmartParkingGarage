@@ -65,7 +65,7 @@ there is no accounts/booking system, historical snapshot archive, or CCTV record
 Docs: <http://127.0.0.1:8000/docs>, `/redoc`, `/openapi.json`.
 
 Dashboard developers: [API quick reference](../docs/frontend-api.md).
-Previous handoff: [backend status report #2](../docs/reports/backend-status-report-02.md) (historical).
+Historical material: [archive index](../docs/archive/README.md), including the [backend status report #2](../docs/archive/reports/backend-status-report-02.md) and [numbered DOCX handoffs](../docs/archive/handoffs/).
 
 ## Unity <-> backend bridge: REST polling
 
@@ -120,8 +120,8 @@ result. Poll `GET /api/integration/commands/{command_id}` for the command outcom
   whether that vehicle exists or is ready to depart, and does not change its vehicle or parking-space projection.
   Unity validates and starts the departure; snapshots report its progress and completion.
 - **Driver parking requests:** SpawnVehicle accepts `payload.auto_depart` (default `true`). Setting it to `false` is
-  forwarded to Unity, which must consume the field to keep the driver-requested vehicle parked. Until that Unity bridge
-  change is made, the backend field alone does not change simulation behavior.
+  forwarded to Unity; the current bridge consumes it so the vehicle stays parked until an individual departure is
+  requested. Unity can report departure through the normal command/snapshot flow.
 - **Structured spawn failures:** Unity may include `error_code` in a failed acknowledgement: `GarageFull`, `LevelFull`,
   `VehicleLimitReached`, or `EntranceBlocked`. The backend records the code on the command and spawn-request result; it
   does not infer codes from message text.
@@ -158,9 +158,10 @@ CORS allows only `http://localhost:3000`, `http://localhost:5173`, `http://127.0
 ## CCTV endpoints
 
 The backend keeps a bounded, process-local latest-frame cache. It neither stores video history nor starts Unity capture.
-Unity must register the current camera catalog and publish JPEG frames; the backend endpoints are implemented, but
-the Unity HTTP publisher and dashboard client are not connected yet. Camera and frame state resets when Unity reports a
-new session or the backend restarts.
+Unity registers the current camera catalog and publishes JPEG frames; `CCTVBackendPublisher` provides this HTTP
+integration when `BackendIntegrationClient.publishCctv` is enabled (default) and a `CCTVCaptureService` is present.
+Camera and frame state resets when Unity reports a new session or the backend restarts. Dashboard consumption is
+separate; backend endpoints are available, but dashboard implementation/integration is outside this repository.
 
 | Method | Path | Caller | Contract |
 | --- | --- | --- | --- |
@@ -190,63 +191,38 @@ its sequence. The backend does not decode or validate JPEG content.
 `/api/cameras` is read-only for dashboards except for the explicit focus endpoints. Dashboards must not send Unity
 catalogs, publish camera frames, or poll the Unity control endpoint.
 
-### Unity publisher handoff
+### Unity camera publisher
 
-These backend APIs are implemented; the missing integration is the Unity HTTP publisher/control adapter. Browse
-`/docs` or fetch `/openapi.json` for the public request/response schemas. They are trusted local/demo APIs without
-authentication, not endpoints to expose directly to the internet.
+The Unity bridge includes `CCTVBackendPublisher`; this is implemented, not a pending handoff. With
+`publishCctv` enabled (default) and a `CCTVCaptureService` in the scene, `BackendIntegrationClient` adds the publisher
+at runtime. It registers the camera catalog after an integration session is established and again after a backend
+restart/session change, starts capture after catalog acceptance, uploads new JPEG frames asynchronously, and polls
+camera control every 0.5 seconds. The publisher applies focus through `SetFocusedCamera(camera_id, focus_generation)`
+or `ClearFocusedCamera`; focused frames carry the generation active at render time. It does not change the operator's
+on-screen camera view. Uploads are bounded and superseded frames are skipped rather than queued; networking does not
+block simulation. This documents code support, not proof of a graphical Unity Play Mode test or live dashboard integration.
 
-1. Publish an ordinary garage snapshot to establish `unity_session_id`, then register the catalog. Send numeric
-   camera levels 0-4 and category names (`Exterior`, `City`, `Entrance`, `Exit`, `ParkingLevel`, `Ramp`, `EV`).
-   Send effective positive capture intervals: thumbnail interval 0 uses the backend's fixed 1-second default,
-   which will not follow a changed Unity capture setting automatically.
-2. Start Unity capture. The current scene has `captureOnStart` off; accepting a catalog does not start capture.
-   Upload each latest JPEG independently of garage snapshots, using `kind=thumbnail` or `kind=focused`, per-camera/kind
-   increasing sequences, render-time UTC `captured_at`, and the frame's actual dimensions. Map Unity's
-   `Thumbnail`/`Focused` enum names to the lowercase wire values. Keep at most one upload in flight per camera/kind;
-   skip superseded frames rather than building a backlog.
-3. Poll camera control about every 0.5 seconds. Apply a non-null selection with `SetFocusedCamera`; clear it with
-   `ClearFocusedCamera` when null. Tag focused capture work with the returned `focus_generation` at capture time and
-   echo it on upload. Never relabel old frames using the generation current at upload time, even for the same camera.
-   Unity's current `CCTVFrame` has no generation field, so capture-time association is part of the Unity integration.
-4. On a session change or backend restart, re-establish the ordinary snapshot session and republish the catalog.
-   A **409** for an obsolete focus generation requires reading current control, not retrying the old frame.
+These trusted local/demo APIs have no authentication and must not be exposed directly to the internet. Browse `/docs`
+or fetch `/openapi.json` for public request/response schemas.
 
-CCTV control/ingest is synchronous: focus acquisition returns **200**, and catalog/frame acceptance or release returns
-**204**. It does not queue a simulation command or return **202**. A focus response is desired capture state, not proof
-that Unity has applied it.
+Backend CCTV control/ingest is synchronous: focus acquisition returns **200**, and catalog/frame acceptance or release
+returns **204**. It does not queue a simulation command or return **202**. A focus response is desired capture state,
+not proof that Unity has applied it.
 
 Dashboard clients poll thumbnail JPEGs about once per second and use `/api/cameras/{camera_id}/stream` for the focused
-view. Unity still uploads individual JPEGs; it does not upload multipart video. WebSocket/WebRTC transport is not
+view. Unity uploads individual JPEGs; it does not upload multipart video. WebSocket/WebRTC transport is not
 implemented. The JPEG endpoint remains available for single-frame reads of either kind.
 
 ### Focused MJPEG viewing
 
-1. Acquire focus, retain the returned `lease_id`, and renew it every 10 seconds while viewing.
-2. Poll `/api/cameras` until that camera has a focused frame (`Fresh` or `Stale`, not `NoFrame`/`Unavailable`).
-   Then set the viewer's `<img>` source to `/api/cameras/{camera_id}/stream`. The stream returns **200** with
-   `multipart/x-mixed-replace; boundary=frame`; each part has `Content-Type: image/jpeg`, `Content-Length`, and the
-   same ETag/session/sequence/capture-time/age/health/dimension metadata as a single-frame response.
-3. Continue polling camera status about once per second for health badges. A native `<img>` cannot expose multipart
-   headers to JavaScript, and an open connection is not proof of freshness. The stream sends only newer frames;
-   capture stopping leaves the last image displayed without repeatedly sending the same JPEG.
-4. Switching camera or losing the focus lease ends the old stream. Open a new stream after the new generation's first
-   frame arrives. Remove the image source when the viewer closes, stop lease renewal, and explicitly release focus.
-
-Any viewer may read the selected focused feed without the owner's token. Opening/closing a stream neither acquires,
-renews, nor releases focus. Same-camera lease renewal keeps the stream open. Before streaming starts, unknown cameras
-return **404** and unavailable/no-frame focused feeds return **503** with the existing health response.
-After headers have been sent, lease expiry/release, focus-generation or Unity-session change, and catalog
-removal/disable/focus revocation end the stream rather than returning a new HTTP error. A frame already in flight
-may finish before closure. Normal closure sends the final multipart boundary; client disconnect cancels its reader.
+The [dashboard CCTV guide](../docs/frontend-api.md#cctv) describes focus acquisition and renewal, waiting for the first
+frame, opening the `<img>` stream, health polling, camera switching, and teardown.
 
 Each reader checks the shared latest-frame cache every 50 ms without holding a lock while sending. Slow readers skip
 superseded frames instead of building a per-viewer frame queue; transport buffers and in-flight images are additional
 to the retained-cache bound. Streaming responses use `Cache-Control: private, no-store` and `X-Accel-Buffering: no`;
 reverse proxies must allow long-lived, unbuffered responses. The stream does not use conditional **304** responses.
 
-This implements the Unity document's JPEG-grid/MJPEG-focused recommendation. Live Unity CCTV/dashboard integration
-still requires the separate publisher and dashboard consumer and has not been verified.
 
 ## Stall inventory
 
@@ -263,9 +239,11 @@ spawn outcomes. It is not a physics or traffic simulator; backend test results d
 
 - `api/routes/` defines HTTP handlers; `api/deps.py` resolves the application services.
 - `models/` owns typed wire contracts and enum values; `services/` owns the projection and command lifecycle.
+- `storage/` owns PostgreSQL repository access and table metadata; `migrations/` contains Alembic schema migrations.
 - Project-local imports use absolute module paths and qualified names, following adapted [Google Python conventions](https://google.github.io/styleguide/pyguide.html#22-imports). Models are imported from their owning modules, not re-exported by `models/__init__.py`.
 - Nontrivial service contracts use explicit return types and concise Google-style `Args`, `Returns`, and `Raises` docstrings. Standard-library and third-party imports retain existing FastAPI/Pydantic conventions.
 - Ruff is the formatter and linter, with a 120-column line length rather than Google's 80-column wrapping.
 - `tests/conftest.py` provides fixtures; `tests/inventory.py` holds independent inventory expectations; `tests/fake_unity.py` exercises the HTTP protocol.
 
-The numbered DOCX handoffs are historical. This README and the dashboard API reference describe the current backend.
+The numbered DOCX handoffs are historical; find them under [archived handoffs](../docs/archive/handoffs/). This README and
+the [dashboard API reference](../docs/frontend-api.md) describe the current backend.

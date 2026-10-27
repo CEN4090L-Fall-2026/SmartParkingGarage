@@ -1,6 +1,8 @@
 # Backend — Status Report #2
 
-Historical report. See the [backend README](../../Backend/README.md) and [dashboard API reference](../frontend-api.md) for current setup and contracts.
+Historical report. Its test counts, in-memory storage description, and planned work reflect the report's original state.
+See the [backend README](../../../Backend/README.md) and [dashboard API reference](../../frontend-api.md)
+for current setup and contracts, or the [archive index](../README.md) for other historical material.
 
 ## 1. Project Description
 

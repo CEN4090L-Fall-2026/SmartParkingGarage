@@ -1,3 +1,12 @@
+# Archived Unity CCTV capture notes
+
+> Historical Unity-side capture notes and proposed transport contract.
+> Backend camera endpoints and Unity's HTTP publisher have since been implemented.
+> Use the [backend guide](../../../Backend/README.md#unity-camera-publisher) and
+> [dashboard API reference](../../frontend-api.md#cctv) for the current contract.
+> Original status claims, performance measurements, and transport options below are preserved as historical material,
+> not current verification results or a list of implemented features.
+
 Operator CCTV system (Unity side)
 Status: Unity capture working. Dashboard streaming NOT integrated. Nothing in Backend/ or the dashboards consumes these feeds yet; this document proposes the contract for that later task.
 Piece

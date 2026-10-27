@@ -93,7 +93,7 @@ new camera's stream once its first focused frame exists. Remove the old image so
 MJPEG responses are not cached, do not return **304**, and require reverse-proxy buffering to be disabled.
 
 Dashboard clients may read camera data and acquire or release focus; only Unity should register catalogs, publish
-frames, and poll camera control. See the [Unity publisher handoff](../Backend/README.md#unity-publisher-handoff) for
+frames, and poll camera control. See the [Unity camera publisher](../Backend/README.md#unity-camera-publisher) for
 the adapter sequence. These APIs have no authentication and are intended for trusted local/demo use.
 
 ## Values and response handling
@@ -104,14 +104,14 @@ the adapter sequence. These APIs have no authentication and are intended for tru
 | Space states | `Available`, `Occupied`, `Reserved`, `OutOfService` |
 | Vehicle lifecycle | `Spawned`, `RequestingAssignment`, `DrivingToStall`, `Parking`, `Parked`, `Departing`, `DrivingToExit`, `Completed`, `Failed` |
 | Simulation state | `Idle`, `Running`, `ArrivalPaused`, `Draining` |
-| POST success | **202 means queued**, not executed. Response contains `command.command_id`; spawn also contains `request.request_id`. |
+| Simulation/spawn/depart POST success | **202 means queued**, not executed. Response contains `command.command_id`; spawn also contains `request.request_id`. |
 | Command status | `Pending` → `Delivered` → `Acknowledged` or `Failed`; can also become `Cancelled` or terminal `OutcomeUnknown` |
 | Spawn-request status | `AcceptedByBackend` → `ForwardedToUnity` → `SpawnedInUnity`, `Failed`, or terminal `OutcomeUnknown`; command cancellation retains the request-level `Failed` mapping |
 | Parking confirmation | Read spawn request's `vehicle_id`, then vehicle's `assigned_space_id`. `SpawnedInUnity` does not mean parked; wait for lifecycle `Parked`. A vehicle snapshot can arrive after its acknowledgement. |
 | Departure confirmation | Track command outcome, then Unity-reported vehicle/stall changes. Acknowledged does not mean exited; never free a stall optimistically. |
 | Failure codes | `GarageFull`, `LevelFull`, `VehicleLimitReached`, `EntranceBlocked`, or null; use failure message if no code is supplied |
 | Data freshness | `SeededBaseline` = initial layout; `UnityLive` = recent snapshot; `UnityLastKnown` = stale data. `/health` alone does not prove Unity is online. |
-| HTTP errors | 404 = missing record; 422 = invalid fields (`detail`); 503 = Unity offline, nothing queued. Service errors contain `message`. |
+| Command HTTP errors | 404 = missing record; 422 = invalid fields (`detail`); 503 = Unity offline, nothing queued. Service errors contain `message`. Camera-specific errors are described above. |
 
 **Refresh:** poll visible data and integration status about once per second without overlapping refreshes. Stop command
 tracking at Acknowledged/Failed/Cancelled/OutcomeUnknown. Do not automatically retry command POSTs: another POST creates
@@ -127,4 +127,8 @@ OutcomeUnknown. Neither is replayed into the new Unity session. The saved garage
 original receipt time, until a fresh report makes it UnityLive. CCTV frames/catalog/focus leases remain disposable.
 There is no authentication or driver-specific request ownership yet.
 
-**Unity integration:** confirm the deployed Unity bridge consumes `auto_depart`, handles `DepartVehicle`, and sends `error_code`. Backend support is implemented; live behavior requires a matching bridge and joint testing. CCTV backend endpoints are implemented, but Unity publishing and dashboard consumption are not yet integrated. Dashboards must not send Unity snapshots, fetch commands for execution, or acknowledge commands.
+**Unity integration:** The current Unity source supports `auto_depart`, executes `DepartVehicle` for a named
+`vehicle_id`, and sends the defined spawn-failure `error_code` values in command acknowledgements. Backend CCTV
+endpoints and Unity camera publishing are implemented; this documents the transport contract, not a dashboard viewer
+implementation. These code paths have not been jointly live-verified here. Dashboards must not send Unity snapshots,
+fetch commands for execution, or acknowledge commands.

@@ -1,3 +1,11 @@
+# Archived CCTV backend plan
+
+> Historical design and implementation notes, superseded by the
+> [backend guide](../../../Backend/README.md#cctv-endpoints) and
+> [dashboard API reference](../../frontend-api.md#cctv).
+> The original content below is retained for context, including outdated publisher, storage, and test-setup assumptions.
+> Unity's camera publisher is now implemented; this is not a current integration checklist.
+
 ## Context
 
 Implement a backend-only CCTV API for Unity's existing fixed-camera network: all thumbnail feeds, one focused feed, explicit freshness, and bounded latest-frame storage. The user selected an exclusive viewer focus lease: competing viewers receive a conflict until release or expiry. Unity uploading and dashboard rendering are separate-owner integrations; provide a complete backend receiver/control/serving contract without modifying either project. Assume conforming inputs and outputs; keep normal boundary validation and resource bounds, but add no image decoding, simulation rules, recording, database, or authentication.

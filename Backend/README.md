@@ -53,7 +53,8 @@ tables. Tests use a controllable clock and a simulated Unity publisher, not the 
 Run one server process: the live projection, connectivity clocks, camera frames, and focus leases remain process-local.
 PostgreSQL makes records durable, not the entire backend multi-worker-safe. Use an available port; the existing Unity
 bridge targets `http://127.0.0.1:8000`. Driver-specific fields and commands require a matching Unity bridge.
-CCTV backend endpoints are available, but Unity publishing and dashboard consumption are not yet integrated.
+Unity Plastic main changeset 4824 includes `CCTVBackendPublisher`, which publishes the camera catalog and JPEG frames
+and polls focus control. Dashboard consumption is a separate integration; see [CCTV](../docs/frontend-api.md#cctv).
 
 Reloading/restarting preserves request/command IDs and known results. Startup cancels commands never delivered and
 marks delivered-but-unacknowledged commands **OutcomeUnknown**; neither is replayed. The latest snapshot is replaced
@@ -76,6 +77,18 @@ Polling was chosen over WebSockets because it is stateless, survives either side
 | Unity -> backend | `POST /api/integration/state` (full snapshot) | 1 per second (serialized setting) |
 | backend -> Unity | `GET /api/integration/commands?unity_session_id=...` | every 0.5 s |
 | Unity -> backend | `POST /api/integration/commands/{command_id}/ack` | once per command |
+| Unity -> backend | `POST /api/integration/cameras` (catalog) | Once per established integration session; again after backend restart |
+| Unity -> backend | `POST /api/integration/cameras/{camera_id}/frames` (raw JPEG) | New captures only; default thumbnails 1 fps per camera, focused 10 fps |
+| backend -> Unity | `GET /api/integration/cameras/control?unity_session_id=...` | every 0.5 s |
+
+**CCTV startup.** Update the separate Unity workspace to Plastic main changeset 4824 or newer, open
+`Assets/Scenes/Main/MainGarage.unity` with Unity 6000.6.0f1, and enter Play Mode with this backend running.
+`BackendIntegrationClient` automatically adds `CCTVBackendPublisher` when `publishCctv` is enabled (the default)
+and a `CCTVCaptureService` exists. After the integration session and catalog are accepted, the publisher starts capture.
+The backend URL comes from the existing bridge (`http://127.0.0.1:8000` by default); there is no separate camera URL.
+Check `/api/integration/status` for `connected: true` and `/api/cameras` for the catalog and fresh thumbnails.
+Acquire a focus lease to start focused capture; merely opening the stream does not select a camera.
+Camera publishing does not move the Unity operator's on-screen view.
 
 **Sessions and sequence.** Unity generates a `unity_session_id` when Play Mode starts and numbers snapshots 1, 2, 3...
 A snapshot whose sequence is not greater than the latest accepted one for that session is rejected with **409** and

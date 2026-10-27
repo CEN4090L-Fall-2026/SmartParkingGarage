@@ -41,9 +41,10 @@ Use JSON bodies with `Content-Type: application/json`. Field names use `snake_ca
 
 ## CCTV
 
-The backend exposes the CCTV transport, but Unity does not yet publish its camera catalog or frames to these endpoints,
-and the dashboard does not yet consume them. The cache is in memory only; frames and focus leases are lost when the
-backend restarts or Unity reports a new session.
+Unity Plastic main changeset 4824 includes `CCTVBackendPublisher`: it registers the camera catalog after the
+simulation bridge establishes a session, starts capture, uploads new JPEGs, and polls focus control every 0.5 seconds.
+The backend transport is available for dashboard consumption; the dashboard viewer is maintained separately.
+The cache is in memory only; frames and focus leases are lost when the backend restarts or Unity reports a new session.
 
 | Endpoint | Caller | Contract |
 | --- | --- | --- |

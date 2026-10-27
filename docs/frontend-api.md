@@ -104,18 +104,26 @@ the adapter sequence. These APIs have no authentication and are intended for tru
 | Vehicle lifecycle | `Spawned`, `RequestingAssignment`, `DrivingToStall`, `Parking`, `Parked`, `Departing`, `DrivingToExit`, `Completed`, `Failed` |
 | Simulation state | `Idle`, `Running`, `ArrivalPaused`, `Draining` |
 | POST success | **202 means queued**, not executed. Response contains `command.command_id`; spawn also contains `request.request_id`. |
-| Command status | `Pending` → `Delivered` → `Acknowledged` or `Failed`; can also become `Cancelled` |
-| Spawn-request status | `AcceptedByBackend` → `ForwardedToUnity` → `SpawnedInUnity` or `Failed` |
+| Command status | `Pending` → `Delivered` → `Acknowledged` or `Failed`; can also become `Cancelled` or terminal `OutcomeUnknown` |
+| Spawn-request status | `AcceptedByBackend` → `ForwardedToUnity` → `SpawnedInUnity`, `Failed`, or terminal `OutcomeUnknown`; command cancellation retains the request-level `Failed` mapping |
 | Parking confirmation | Read spawn request's `vehicle_id`, then vehicle's `assigned_space_id`. `SpawnedInUnity` does not mean parked; wait for lifecycle `Parked`. A vehicle snapshot can arrive after its acknowledgement. |
 | Departure confirmation | Track command outcome, then Unity-reported vehicle/stall changes. Acknowledged does not mean exited; never free a stall optimistically. |
 | Failure codes | `GarageFull`, `LevelFull`, `VehicleLimitReached`, `EntranceBlocked`, or null; use failure message if no code is supplied |
 | Data freshness | `SeededBaseline` = initial layout; `UnityLive` = recent snapshot; `UnityLastKnown` = stale data. `/health` alone does not prove Unity is online. |
 | HTTP errors | 404 = missing record; 422 = invalid fields (`detail`); 503 = Unity offline, nothing queued. Service errors contain `message`. |
 
-**Refresh:** poll the visible data and integration status about once per second without overlapping refreshes. Stop command tracking at Acknowledged/Failed/Cancelled. Do not automatically retry command POSTs: another POST creates another command.
+**Refresh:** poll visible data and integration status about once per second without overlapping refreshes. Stop command
+tracking at Acknowledged/Failed/Cancelled/OutcomeUnknown. Do not automatically retry command POSTs: another POST creates
+another command. Unknown means delivered but execution unconfirmed, not rejected; display that uncertainty. Its request
+has `forwarded_to_unity=true`, `spawned_in_unity=false`, and null vehicle/failure/error fields. False means no confirmed
+spawn, not proof that no vehicle exists. `acknowledged_at` is null for cancellation/unknown, not a synthetic ack.
 
 **Availability:** `by_space_type` contains physical counts, not available counts. For available EV/Standard counts, filter `/api/spaces?state=Available` and group by type/level.
 
-**Restart:** state is in memory. If `backend_instance_id` changes, clear old command/request tracking; IDs may be reused. There is no authentication or driver-specific request ownership yet.
+**Restart:** PostgreSQL preserves request/command IDs and confirmed outcomes; keep tracking their existing IDs when
+`backend_instance_id` changes. Never-delivered commands become Cancelled; delivered commands without results become
+OutcomeUnknown. Neither is replayed into the new Unity session. The saved garage projection is UnityLastKnown, with its
+original receipt time, until a fresh report makes it UnityLive. CCTV frames/catalog/focus leases remain disposable.
+There is no authentication or driver-specific request ownership yet.
 
 **Unity integration:** confirm the deployed Unity bridge consumes `auto_depart`, handles `DepartVehicle`, and sends `error_code`. Backend support is implemented; live behavior requires a matching bridge and joint testing. CCTV backend endpoints are implemented, but Unity publishing and dashboard consumption are not yet integrated. Dashboards must not send Unity snapshots, fetch commands for execution, or acknowledge commands.

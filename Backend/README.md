@@ -13,29 +13,53 @@ The personal `CrashHermit/SmartParkingGarage-Backend` repository is not the team
   projection** of what Unity last reported. It never decides simulation outcomes.
 - Until a Unity session reports, queries return the **seeded baseline** (414 stalls, 406 operational, 8 OutOfService,
   8 EV on L2). Once Unity reports, its snapshot **replaces** the projection completely; nothing is merged with the seed.
-- State is **in memory only** (lost on restart). No database, authentication, or WebSockets; dashboards consume this API from separate projects.
+- PostgreSQL persists parking-request intent, command delivery/results, Unity session metadata, and the latest complete
+  snapshot. Restart restores that snapshot as **UnityLastKnown**, not live simulation state. CCTV remains in memory.
+- No authentication or WebSockets; dashboards consume this API from separate projects.
 
 ## Setup (Python 3.11+), run, test
 
-From this repository's `Backend/` directory (Python 3.11+ and uv installed):
+From this repository's `Backend/` directory (Python 3.11+, uv, and Docker with Compose installed):
 
 ```bash
 uv sync
+docker compose up -d --wait postgres
+export SPG_DATABASE_URL='postgresql+psycopg://smart_parking:smart_parking_dev@127.0.0.1:5432/smart_parking'
+uv run alembic upgrade head
 uv run uvicorn smart_parking_backend.main:app --host 127.0.0.1 --port 8000
-uv run pytest -q
-uv run ruff format --check src tests
-uv run ruff check src tests
 ```
 
-Run one server process: snapshots, command queues, camera frames, and focus leases are process-local. PostgreSQL,
-Docker, and a `.env` file are not required. Use an available port; the existing Unity baseline bridge targets
-`http://127.0.0.1:8000`.
-Driver-specific fields and commands require a matching Unity bridge implementation. CCTV backend endpoints are now
-available, but Unity catalog/frame publishing and dashboard consumption are not yet integrated.
-Reloading or restarting the backend clears its state, including CCTV frames and focus leases.
+Compose provisions PostgreSQL 17 with a persistent named volume. The password above is for local development only.
+Set `SPG_POSTGRES_PORT` before running Compose to change the host port, and change the URL to match.
+An existing PostgreSQL database can be used instead: skip Compose and provide its driver-qualified URL.
+`SPG_DATABASE_URL` and an explicitly migrated schema are required; startup does not migrate, load `.env`, or fall
+back to memory. Run `uv run alembic upgrade head` when deploying schema changes. Do not delete the database volume
+unless intentionally discarding all durable records.
 
-The development dependencies (pytest, httpx, Ruff) are installed by `uv sync`. The backend tests use isolated app
-instances and a controllable clock; they do not connect to Unity or a development database.
+In another terminal, run tests and quality checks:
+
+```bash
+export SPG_TEST_DATABASE_URL='postgresql+psycopg://smart_parking:smart_parking_dev@127.0.0.1:5432/smart_parking'
+uv run pytest -q
+uv run ruff format --check src tests migrations
+uv run ruff check src tests migrations
+```
+
+The test URL is required explicitly and must permit creating/dropping schemas. Each test creates a uniquely named
+schema, applies the real Alembic migrations, and drops only that schema afterward; it never resets shared application
+tables. Tests use a controllable clock and a simulated Unity publisher, not the Unity editor. Development dependencies
+(pytest, httpx, Ruff) are installed by `uv sync`.
+
+Run one server process: the live projection, connectivity clocks, camera frames, and focus leases remain process-local.
+PostgreSQL makes records durable, not the entire backend multi-worker-safe. Use an available port; the existing Unity
+bridge targets `http://127.0.0.1:8000`. Driver-specific fields and commands require a matching Unity bridge.
+CCTV backend endpoints are available, but Unity publishing and dashboard consumption are not yet integrated.
+
+Reloading/restarting preserves request/command IDs and known results. Startup cancels commands never delivered and
+marks delivered-but-unacknowledged commands **OutcomeUnknown**; neither is replayed. The latest snapshot is replaced
+on each accepted report, not archived. Its original receipt time is preserved, and command intake stays offline until
+a fresh Unity report arrives. This restores backend knowledge, not Unity vehicles. Records are retained indefinitely;
+there is no accounts/booking system, historical snapshot archive, or CCTV recording. Frames and focus leases are lost.
 
 Docs: <http://127.0.0.1:8000/docs>, `/redoc`, `/openapi.json`.
 
@@ -55,11 +79,14 @@ Polling was chosen over WebSockets because it is stateless, survives either side
 
 **Sessions and sequence.** Unity generates a `unity_session_id` when Play Mode starts and numbers snapshots 1, 2, 3...
 A snapshot whose sequence is not greater than the latest accepted one for that session is rejected with **409** and
-changes nothing. A different session id is a new session: it is accepted, sequence tracking restarts, and commands still
-open for the old session are cancelled. If the backend restarts (`backend_instance_id` changes) Unity starts a new session.
+changes nothing. A different session id is accepted with new sequence tracking: old Pending commands become Cancelled,
+and old Delivered commands without results become OutcomeUnknown. If the backend restarts (`backend_instance_id`
+changes) Unity starts a new integration session without resetting its simulation. The returning client's first fresh
+old-session snapshot may be accepted so it can learn the new backend ID; completed/unknown commands never revive.
 
-**Connectivity.** `connected` is true while the last accepted snapshot is at most `SPG_INTEGRATION_TIMEOUT_SECONDS`
-(default 5) old. Garage, space, vehicle, and simulation projection responses carry `X-Data-Source`:
+**Connectivity.** `connected` requires an accepted snapshot in this process within `SPG_INTEGRATION_TIMEOUT_SECONDS`
+(default 5). A restored snapshot is always disconnected until a fresh report, even if its saved timestamp is recent.
+Garage, space, vehicle, and simulation projection responses carry `X-Data-Source`:
 `SeededBaseline`, `UnityLive`, or `UnityLastKnown`. Garage and simulation also include `data_source` in their bodies.
 Integration status reports freshness in its body; command and spawn-request queries are records, not freshness indicators.
 
@@ -68,9 +95,10 @@ and `POST /api/vehicles/{vehicle_id}/depart` **queue** commands and return **202
 simulation state and vehicle projection change only when Unity executes a command and a subsequent snapshot reports the
 result. Poll `GET /api/integration/commands/{command_id}` for the command outcome.
 
-- IDs are `CMD_000001`, `CMD_000002`, ... (spawn requests are separately `REQ_0001`...).
-- Status: `Pending -> Delivered -> Acknowledged | Failed`, or `Cancelled`.
-- **FIFO:** commands are always returned oldest first.
+- IDs retain the `CMD_000001` / `REQ_0001` format, allocated by durable PostgreSQL sequences. They are not reused on
+  backend restart; gaps are valid. Command order uses the numeric sequence, not a string comparison.
+- Status: `Pending -> Delivered -> Acknowledged | Failed`, or `Cancelled` / `OutcomeUnknown`.
+- **FIFO:** eligible commands are always returned oldest first, within their owning Unity session.
 - **Offline:** with no Unity session reporting within the timeout, every command endpoint returns **503** and queues
   nothing; backend state is never changed as if Unity had executed it.
 - **Validation of transitions belongs to Unity.** An invalid command (for example `pause-arrivals` while Idle) is queued
@@ -87,11 +115,18 @@ result. Poll `GET /api/integration/commands/{command_id}` for the command outcom
 - **Delivery is at-least-once.** A delivered command with no ack after `SPG_COMMAND_REDELIVERY_SECONDS` (default 5) is handed
   out again (`delivery_count` increments). Unity remembers processed ids and only re-acknowledges them, never re-executes.
 - **Acks are idempotent:** acknowledging a finished command returns `duplicate: true` and changes nothing; the first result wins.
+- **Unknown outcomes:** `OutcomeUnknown` is terminal, not failed or successful, and is excluded from pending counts.
+  Do not automatically retry it: a vehicle may have been created before its acknowledgement was lost. It has no
+  confirmed vehicle/error code and is not reconciled from snapshots. Acknowledgements cannot cross session ownership.
+- **Acknowledgement time:** `acknowledged_at` records an actual Unity success/failure response, not cancellation or
+  unknown-outcome classification; it remains null for the latter two.
 - **Reset:** queuing a reset immediately cancels every earlier command that was never delivered ("obsolete"). Commands
   already delivered are left alone (FIFO means they finish before the reset runs); when a reset is acknowledged, any
   earlier command still open is cancelled as well. Commands created after the reset are unaffected.
-- **Spawn requests** move `AcceptedByBackend -> ForwardedToUnity -> SpawnedInUnity` (with the `vehicle_id` Unity reports)
-  or `Failed`. Only `SpawnedInUnity` means a vehicle exists.
+- **Spawn requests** move `AcceptedByBackend -> ForwardedToUnity -> SpawnedInUnity` (with the reported `vehicle_id`),
+  `Failed`, or `OutcomeUnknown`. A cancelled command retains the existing request-level Failed mapping. Request status
+  and flags are derived from the linked command, not separately mutable records. Unknown is forwarded but not confirmed
+  spawned, with null vehicle/failure/error fields. Only `SpawnedInUnity` confirms successful creation.
 
 ## Integration endpoints
 

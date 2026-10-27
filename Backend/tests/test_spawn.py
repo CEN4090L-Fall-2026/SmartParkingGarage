@@ -34,9 +34,9 @@ def test_spawn_failure_is_recorded_without_creating_vehicle(client, unity):
     client.post("/api/simulation/drain")
     unity.step()
     assert client.get("/api/simulation").json()["state"] == "Draining"
-    spawn(client, {"request_type": "Standard"})
+    refused = spawn(client, {"request_type": "Standard"}).json()
     unity.step()
-    failed = client.get("/api/vehicles/spawn-requests/REQ_0002").json()
+    failed = client.get(f"/api/vehicles/spawn-requests/{refused['request']['request_id']}").json()
     assert failed["status"] == "Failed"
     assert failed["spawned_in_unity"] is False and failed["vehicle_id"] is None
     assert len(client.get("/api/vehicles").json()) == 1

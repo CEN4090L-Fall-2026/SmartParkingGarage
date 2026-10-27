@@ -1,6 +1,13 @@
+import os
+import time
+from collections.abc import Callable
+from contextlib import asynccontextmanager
+from datetime import UTC, datetime
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from sqlalchemy import create_engine
 
 import smart_parking_backend
 from smart_parking_backend.api.routes import (
@@ -16,6 +23,7 @@ from smart_parking_backend.api.routes import integration as integration_routes
 from smart_parking_backend.services import cctv as cctv_service
 from smart_parking_backend.services import garage_state
 from smart_parking_backend.services import integration as integration_service
+from smart_parking_backend.storage.repository import PostgresRepository
 
 # Explicit local development origins for future React clients; deliberately not "*".
 ALLOWED_ORIGINS = [
@@ -27,9 +35,36 @@ ALLOWED_ORIGINS = [
 
 
 def create_app(
-    service: garage_state.GarageStateService | None = None,
-    integration: integration_service.IntegrationService | None = None,
+    *,
+    database_url: str | None = None,
+    clock: Callable[[], float] = time.monotonic,
+    utcnow: Callable[[], datetime] = lambda: datetime.now(UTC),
+    timeout_seconds: float | None = None,
+    redelivery_seconds: float | None = None,
 ) -> FastAPI:
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        engine = create_engine(database_url or os.environ["SPG_DATABASE_URL"])
+        try:
+            repository = PostgresRepository(engine)
+            saved = repository.recover(utcnow())
+            garage_service = garage_state.GarageStateService(repository)
+            integration = integration_service.IntegrationService(
+                garage_service,
+                repository,
+                timeout_seconds=timeout_seconds,
+                redelivery_seconds=redelivery_seconds,
+                clock=clock,
+                utcnow=utcnow,
+            )
+            integration.restore_last_known(saved)
+            app.state.garage_service = garage_service
+            app.state.integration_service = integration
+            app.state.cctv_service = integration.cctv_service
+            yield
+        finally:
+            engine.dispose()
+
     app = FastAPI(
         title="Smart Parking Garage Backend",
         version=smart_parking_backend.__version__,
@@ -37,10 +72,8 @@ def create_app(
             "REST API and shared contracts. Unity is authoritative for live simulation state and reports it "
             "via /api/integration; commands are queued here and executed by Unity."
         ),
+        lifespan=lifespan,
     )
-    app.state.garage_service = service or garage_state.GarageStateService()
-    app.state.integration_service = integration or integration_service.IntegrationService(app.state.garage_service)
-    app.state.cctv_service = app.state.integration_service.cctv_service
 
     app.add_middleware(
         CORSMiddleware,

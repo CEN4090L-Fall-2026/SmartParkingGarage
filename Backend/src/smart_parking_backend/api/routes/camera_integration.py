@@ -52,6 +52,7 @@ async def publish_frame(
             status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, detail="Content-Type must be image/jpeg."
         )
     content_length = request.headers.get("content-length")
+    # Check the advertised size early, then enforce the bound on actual chunks before mutating the frame cache.
     if content_length is not None and int(content_length) > camera_models.MAX_FRAME_BYTES:
         raise HTTPException(
             status_code=status.HTTP_413_CONTENT_TOO_LARGE, detail="JPEG exceeds the 2 MiB upload limit."

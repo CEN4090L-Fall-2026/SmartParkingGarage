@@ -1,7 +1,7 @@
-"""Unity integration state backed by durable command and snapshot records.
+"""Coordinate Unity reports and commands with durable records and the live backend projection.
 
-Unity remains authoritative for simulation state. PostgreSQL owns command delivery/results and the latest accepted
-snapshot; this service protects the live projection and session/sequence decisions.
+Unity remains authoritative for simulation execution. PostgreSQL owns command delivery/results and the latest accepted
+snapshot; this process owns session/sequence decisions, connectivity freshness, and the dashboard projection.
 """
 
 import os
@@ -45,6 +45,12 @@ def _env_float(name: str, default: float) -> float:
 
 
 class IntegrationService:
+    """Coordinate durable integration records with process-local connectivity and garage state.
+
+    This service validates session and sequence ownership, but never executes simulation commands. A restored snapshot
+    is last-known dashboard data until this process receives a fresh Unity report.
+    """
+
     def __init__(
         self,
         garage: garage_state.GarageStateService,
@@ -71,6 +77,7 @@ class IntegrationService:
         self._clock = clock
         self.cctv_service = cctv_service if cctv_service is not None else cctv.CCTVService(clock, utcnow)
         self._utcnow = utcnow
+        # Nested calls reacquire this lock; it coordinates threads in this process, not multiple server workers.
         self._lock = threading.RLock()
         self.backend_instance_id = uuid.uuid4().hex[:12]
         self._session_id: str | None = None
@@ -81,6 +88,10 @@ class IntegrationService:
 
     # ---- connectivity ----------------------------------------------------------------------------------------
     def _age(self) -> float | None:
+        """Measure current age monotonically, or use UTC receipt age before this process receives a report.
+
+        The restored UTC time supports last-known age reporting after restart; it never establishes live connectivity.
+        """
         if self._last_update_mono is not None:
             return self._clock() - self._last_update_mono
         if self._restored_received_at is not None:
@@ -88,6 +99,7 @@ class IntegrationService:
         return None
 
     def is_connected(self) -> bool:
+        """Return whether the current Unity session has reported within the configured timeout."""
         with self._lock:
             age = self._age()
             return self._session_id is not None and self._last_update_mono is not None and age <= self.timeout_seconds
@@ -114,7 +126,11 @@ class IntegrationService:
             )
 
     def restore_last_known(self, saved: StoredSnapshot | None) -> None:
-        """Restore the durable projection without treating it as a fresh Unity connection."""
+        """Restore dashboard knowledge and sequence identity, not Unity objects or live connectivity.
+
+        With no saved snapshot the seeded projection remains unchanged. A restored report does not enable command
+        intake; a fresh snapshot in this process is required.
+        """
         with self._lock:
             if saved is None:
                 return
@@ -129,7 +145,20 @@ class IntegrationService:
 
     # ---- snapshots -------------------------------------------------------------------------------------------
     def accept_snapshot(self, snapshot: integration_models.UnityStateSnapshot) -> integration_models.SnapshotAck:
-        """Persist each accepted full snapshot before publishing it to the live projection."""
+        """Persist a full Unity report before replacing the live projection.
+
+        Args:
+            snapshot: Full state report whose session and sequence are being accepted.
+
+        Returns:
+            The acknowledgement containing the accepted session and sequence.
+
+        Raises:
+            StaleSnapshotError: If this session has already reported this sequence or a newer one.
+
+        A new session also clears the previous session's CCTV state. Persistence precedes in-memory publication, but
+        the database write and projection update are not one atomic transaction.
+        """
         with self._lock:
             new_session = snapshot.unity_session_id != self._session_id
             if not new_session and snapshot.sequence <= self._latest_sequence:
@@ -160,6 +189,18 @@ class IntegrationService:
     def enqueue(
         self, command_type: enums.CommandType, payload: integration_models.CommandPayload | None = None
     ) -> integration_models.BackendCommand:
+        """Persist a command only while Unity is fresh; leave simulation validation and occupancy to Unity.
+
+        Args:
+            command_type: Unity command to enqueue.
+            payload: Command-specific data, or an empty payload when omitted.
+
+        Returns:
+            The durable command record.
+
+        Raises:
+            UnityOfflineError: If Unity is not connected; no command is persisted.
+        """
         with self._lock:
             if not self.is_connected():
                 raise UnityOfflineError("Unity is not connected; the command was not queued.")
@@ -170,7 +211,19 @@ class IntegrationService:
     def enqueue_spawn(
         self, payload: integration_models.CommandPayload
     ) -> tuple[integration_models.BackendCommand, vehicle_models.VehicleSpawnRequest]:
-        """Persist a linked spawn request and command atomically after confirming Unity is live."""
+        """Create linked spawn-request and command records atomically while Unity is fresh.
+
+        Args:
+            payload: Spawn details shared by the request and Unity command.
+
+        Returns:
+            The command and its spawn request, in that order.
+
+        Raises:
+            UnityOfflineError: If Unity is not connected; neither record is created.
+
+        Queueing intent does not change projected occupancy or validate Unity's simulation transition.
+        """
         with self._lock:
             if not self.is_connected():
                 raise UnityOfflineError("Unity is not connected; the spawn request was not created.")
@@ -181,7 +234,19 @@ class IntegrationService:
             raise SessionMismatchError(f"Session '{session_id}' is not the current Unity session '{self._session_id}'.")
 
     def fetch_commands(self, session_id: str, limit: int = 10) -> list[integration_models.BackendCommand]:
-        """Return durable FIFO work and eligible same-session redeliveries."""
+        """Return durable work and eligible same-session redeliveries.
+
+        Args:
+            session_id: Current Unity session requesting commands.
+            limit: Maximum eligible commands to return.
+
+        Returns:
+            Commands ordered by numeric command order. Later work need not wait for earlier acknowledgements, so Unity
+            must deduplicate by command ID; delivery is at least once, not exactly once.
+
+        Raises:
+            SessionMismatchError: If the requester is not the current Unity session.
+        """
         with self._lock:
             self._require_session(session_id)
             return self._repository.fetch_commands(session_id, self._utcnow(), self.redelivery_seconds, limit)
@@ -189,7 +254,21 @@ class IntegrationService:
     def acknowledge(
         self, command_id: str, ack: integration_models.CommandAckRequest
     ) -> tuple[integration_models.BackendCommand, bool]:
-        """Record Unity's result while preserving the first confirmed or unknown terminal outcome."""
+        """Record Unity's command result without revising a terminal outcome.
+
+        Args:
+            command_id: Durable command being acknowledged.
+            ack: Unity session and reported command result.
+
+        Returns:
+            The command and whether the result was already terminal. The first terminal result, including
+            ``OutcomeUnknown``, remains authoritative; an acknowledgement is not independent proof of physical parking
+            or departure completion.
+
+        Raises:
+            garage_state.NotFoundError: If the command does not exist.
+            SessionMismatchError: If Unity's session does not own the command or is not current.
+        """
         with self._lock:
             command = self._repository.get_command(command_id)
             if command is None:

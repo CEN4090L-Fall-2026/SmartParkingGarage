@@ -1,3 +1,5 @@
+"""Hold process-local camera catalog, frames, focus ownership, and freshness metadata."""
+
 import hashlib
 import threading
 import time
@@ -30,6 +32,7 @@ class FeedUnavailableError(Exception):
 
 @dataclass(frozen=True, slots=True)
 class StoredFrame:
+    """Cached JPEG plus its session, sequence, capture-age, and focused-generation identity."""
     session_id: str
     camera_id: str
     kind: camera_models.FrameKind
@@ -45,6 +48,11 @@ class StoredFrame:
 
 
 class CCTVService:
+    """Serve the current session's in-memory CCTV catalog, frames, and viewer focus lease.
+
+    Camera state is process-local; unlike the garage projection, it is not restored from PostgreSQL.
+    """
+
     def __init__(
         self,
         clock: Callable[[], float] = time.monotonic,
@@ -66,8 +74,14 @@ class CCTVService:
         self._focus_expires_at: datetime | None = None
 
     def reset_for_session(self, session_id: str) -> None:
+        """Discard camera, frame, sequence, and focus state before accepting another Unity session.
+
+        Args:
+            session_id: Unity session that will own subsequent camera reports.
+        """
         with self._lock:
             self._session_id = session_id
+            # Old-session images cannot be presented as current after a session boundary; this state is not persisted.
             self._catalog.clear()
             self._thumbnails.clear()
             self._focused_frame = None
@@ -76,18 +90,31 @@ class CCTVService:
             self._clear_focus()
 
     def replace_catalog(self, catalog: camera_models.CameraCatalogRequest) -> None:
+        """Replace camera definitions while retaining buffers only for still-enabled camera IDs.
+
+        Args:
+            catalog: Complete catalog and capture intervals reported by the current Unity session.
+
+        Raises:
+            CameraConflictError: If the catalog belongs to another Unity session.
+
+        A zero thumbnail interval uses the existing default. Metadata changes alone do not invalidate retained frames,
+        while disabled/removed cameras and invalid focus selections lose their cached state.
+        """
         with self._lock:
             self._expire_focus()
             self._require_session(catalog.unity_session_id)
             next_catalog = {}
             for camera in catalog.cameras:
                 if camera.thumbnail_interval_seconds == 0:
+                    # Zero requests the backend's established interval instead of disabling thumbnail freshness checks.
                     camera = camera.model_copy(
                         update={
                             "thumbnail_interval_seconds": camera_models.DEFAULT_THUMBNAIL_INTERVAL_SECONDS,
                         }
                     )
                 next_catalog[camera.camera_id] = camera
+            # Retain pixels only for IDs enabled in the new catalog; prior catalog enablement is not required.
             retained = {
                 camera_id for camera_id, camera in next_catalog.items() if camera.enabled and camera_id in self._catalog
             }
@@ -102,6 +129,7 @@ class CCTVService:
             focus_camera = self._focus_camera_id
             if focus_camera is not None:
                 definition = self._catalog.get(focus_camera)
+                # Catalog changes revoke focus when its selected camera is no longer enabled and focusable.
                 if definition is None or not definition.enabled or not definition.allow_focused:
                     self._clear_focus()
 
@@ -111,6 +139,18 @@ class CCTVService:
         metadata: camera_models.FrameUpload,
         data: bytes,
     ) -> None:
+        """Accept a newer frame only for the current session and camera/focus configuration.
+
+        Args:
+            camera_id: Catalog entry that produced the JPEG.
+            metadata: Session, sequence, capture time, and optional focus generation.
+            data: Complete JPEG bytes, bounded by the HTTP upload route.
+
+        Raises:
+            CameraConflictError: If session/focus generation/sequence identity is stale.
+            FeedUnavailableError: If the camera is disabled or cannot provide the requested focused feed.
+            garage_state.NotFoundError: If the camera is absent from the current catalog.
+        """
         with self._lock:
             self._expire_focus()
             self._require_session(metadata.unity_session_id)
@@ -130,6 +170,7 @@ class CCTVService:
                     or self._focus_generation is None
                 ):
                     raise CameraConflictError("Focused frame does not match the active focus generation.")
+            # Reject stale frame identity before advancing sequence state or replacing the cached image.
             key = (camera_id, metadata.kind)
             if metadata.sequence <= self._sequences.get(key, 0):
                 raise CameraConflictError(
@@ -137,6 +178,7 @@ class CCTVService:
                 )
             now_mono = self._clock()
             initial_age = max(0.0, (self._utcnow() - metadata.captured_at).total_seconds())
+            # ETags track session/camera/kind/sequence/generation identity, not JPEG byte content.
             identity = (
                 f"{metadata.unity_session_id}\0{camera_id}\0{metadata.kind.value}\0"
                 f"{metadata.sequence}\0{metadata.focus_generation or ''}"
@@ -176,6 +218,19 @@ class CCTVService:
             ]
 
     def get_frame(self, camera_id: str, kind: camera_models.FrameKind) -> tuple[StoredFrame, camera_models.FeedStatus]:
+        """Return the retained frame and its current age/health without renewing viewer focus.
+
+        Args:
+            camera_id: Catalog camera whose image is requested.
+            kind: Thumbnail or currently focused image.
+
+        Returns:
+            The cached frame and status computed at retrieval time; stale frames remain readable.
+
+        Raises:
+            garage_state.NotFoundError: If the camera is unknown.
+            FeedUnavailableError: If the camera/feed is unavailable or has no cached frame.
+        """
         with self._lock:
             self._expire_focus()
             definition = self._catalog.get(camera_id)
@@ -202,6 +257,23 @@ class CCTVService:
             return frame, self._status_for_frame(definition, kind, frame)
 
     def acquire_focus(self, camera_id: str, lease_id: str | None) -> camera_models.FocusLease:
+        """Acquire or renew a focus lease and return the focused capture generation.
+
+        Args:
+            camera_id: Enabled camera that permits focused capture.
+            lease_id: Current viewer's ownership token when renewing or switching; omit for a new lease.
+
+        Returns:
+            The viewer lease and the capture generation Unity must use for focused uploads.
+
+        Raises:
+            garage_state.NotFoundError: If the camera is unknown.
+            FeedUnavailableError: If the camera cannot be focused.
+            CameraConflictError: If the supplied lease does not own the current focus.
+
+        Same-camera renewal preserves generation; new leases and camera switches create a fresh generation. The viewer
+        lease proves ownership, while the separate generation binds uploads to the selected capture.
+        """
         with self._lock:
             self._expire_focus()
             self._camera_for_focus(camera_id)
@@ -216,6 +288,7 @@ class CCTVService:
                 if lease_id != self._focus_lease_id:
                     raise CameraConflictError("Focused camera is controlled by another viewer.")
                 if camera_id != self._focus_camera_id:
+                    # Switching cameras invalidates the old image and rotates the generation Unity must stamp on frames.
                     self._focused_frame = None
                     self._focus_generation = uuid.uuid4().hex
                     self._focus_camera_id = camera_id
@@ -229,6 +302,14 @@ class CCTVService:
             )
 
     def release_focus(self, lease_id: str | None) -> None:
+        """Release focus only when the supplied token owns it; releasing an inactive lease is a no-op.
+
+        Args:
+            lease_id: Current viewer's focus ownership token.
+
+        Raises:
+            CameraConflictError: If another viewer owns the active focus lease.
+        """
         with self._lock:
             self._expire_focus()
             if self._focus_lease_id is None:
@@ -243,6 +324,17 @@ class CCTVService:
             return self._focus_state()
 
     def control(self, session_id: str) -> camera_models.FocusState:
+        """Return capture control state for the current Unity session.
+
+        Args:
+            session_id: Unity session requesting focus-control state.
+
+        Returns:
+            The current camera and capture generation, if focus is active.
+
+        Raises:
+            CameraConflictError: If the request does not match the current session.
+        """
         with self._lock:
             self._expire_focus()
             self._require_session(session_id)
@@ -261,6 +353,7 @@ class CCTVService:
             raise CameraConflictError("Camera request does not match the current Unity session.")
 
     def _expire_focus(self) -> None:
+        # Expiry is lazy: the next service operation clears the lease; there is no background timer.
         if self._focus_deadline_mono is not None and self._clock() >= self._focus_deadline_mono:
             self._clear_focus()
 
@@ -306,6 +399,7 @@ class CCTVService:
         kind: camera_models.FrameKind,
         frame: StoredFrame,
     ) -> camera_models.FeedStatus:
+        # Preserve capture age but use monotonic elapsed time thereafter, avoiding wall-clock changes after receipt.
         age_seconds = max(
             0.0,
             frame.initial_age_seconds + self._clock() - frame.received_mono,

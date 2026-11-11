@@ -1,4 +1,8 @@
-"""Durable request intent, command delivery/results and last-known Unity state."""
+"""Persist backend request intent, command outcomes, and the latest Unity snapshot.
+
+The stored snapshot restores dashboard knowledge, not Unity objects. Database transactions and row locks protect these
+repository operations; they do not make process-local services safe to share across multiple server workers.
+"""
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -42,9 +46,11 @@ def _command(row: sa.RowMapping) -> integration_models.BackendCommand:
 
 
 def _request(row: sa.RowMapping) -> vehicle_models.VehicleSpawnRequest:
+    # Request state is derived from its linked command so the two records cannot drift independently.
     status = enums.CommandStatus(row["status"])
     confirmed = status == enums.CommandStatus.ACKNOWLEDGED
     failed = status in (enums.CommandStatus.FAILED, enums.CommandStatus.CANCELLED)
+    # Delivery means Unity received work, not that a spawn succeeded; unknown outcomes invent no ID or failure code.
     return vehicle_models.VehicleSpawnRequest(
         request_id=row["request_id"],
         request_type=row["request_type"],
@@ -61,6 +67,11 @@ def _request(row: sa.RowMapping) -> vehicle_models.VehicleSpawnRequest:
 
 
 class PostgresRepository:
+    """Own transaction boundaries for durable records, not Unity simulation restoration.
+
+    Row locks coordinate database operations, but session freshness and the in-memory projection remain process-local.
+    """
+
     def __init__(self, engine: sa.Engine) -> None:
         self._engine = engine
 
@@ -73,11 +84,13 @@ class PostgresRepository:
     ) -> None:
         commands = schema.commands
         scope = commands.c.unity_session_id == session_id if session_id is not None else sa.true()
+        # Pending work was never delivered and can be cancelled; delivered work may already have executed.
         connection.execute(
             commands.update()
             .where(scope, commands.c.status == enums.CommandStatus.PENDING.value)
             .values(status=enums.CommandStatus.CANCELLED.value, result_message=pending_message)
         )
+        # Keep delivered work explicitly uncertain instead of retrying it or inventing an acknowledgement time.
         connection.execute(
             commands.update()
             .where(scope, commands.c.status == enums.CommandStatus.DELIVERED.value)
@@ -85,6 +98,15 @@ class PostgresRepository:
         )
 
     def recover(self, now: datetime) -> StoredSnapshot | None:
+        """End unfinished work and sessions, then return the last durable projection if one exists.
+
+        Args:
+            now: Backend time used to close the previously active session.
+
+        Returns:
+            The saved latest snapshot, or ``None`` if none exists. Recovery still updates unfinished commands and
+            closes sessions when no snapshot is stored.
+        """
         with self._engine.begin() as connection:
             self._end_session_commands(
                 connection,
@@ -110,6 +132,15 @@ class PostgresRepository:
             )
 
     def save_snapshot(self, snapshot: integration_models.UnityStateSnapshot, received_at: datetime) -> None:
+        """Atomically close the prior session, update session metadata, and replace the latest snapshot.
+
+        Args:
+            snapshot: Full Unity report already accepted by the service layer.
+            received_at: Backend receipt time, not Unity's informational timestamp.
+
+        The row is a latest-state recovery projection, not a snapshot archive. Session/sequence validation and ordering
+        are owned by ``IntegrationService``.
+        """
         sessions, latest = schema.unity_sessions, schema.latest_garage_snapshot
         with self._engine.begin() as connection:
             previous_session = connection.scalar(
@@ -162,8 +193,10 @@ class PostgresRepository:
         spawn_request_id: str | None = None,
     ) -> integration_models.BackendCommand:
         commands = schema.commands
+        # Database sequences provide durable IDs/order; rollbacks may leave valid gaps.
         order = connection.scalar(sa.select(schema.command_order_seq.next_value()))
         command_id = f"CMD_{order:06d}"
+        # Only older work known never delivered is cancelled here; delivered work may already have executed.
         if command_type == enums.CommandType.RESET_SIMULATION:
             connection.execute(
                 commands.update()
@@ -211,6 +244,18 @@ class PostgresRepository:
     def enqueue_spawn(
         self, payload: integration_models.CommandPayload, unity_session_id: str, now: datetime
     ) -> tuple[integration_models.BackendCommand, vehicle_models.VehicleSpawnRequest]:
+        """Persist spawn intent and its Unity command in the same database transaction.
+
+        Args:
+            payload: Spawn details shared by the request record and command.
+            unity_session_id: Unity session that will receive the command.
+            now: Backend time for both records.
+
+        Returns:
+            The command and linked request, in that order.
+
+        Sequence-backed identifiers persist across restarts; gaps are valid when a transaction rolls back.
+        """
         with self._engine.begin() as connection:
             order = connection.scalar(sa.select(schema.parking_request_order_seq.next_value()))
             request_id = f"REQ_{order:04d}"
@@ -237,6 +282,18 @@ class PostgresRepository:
     def fetch_commands(
         self, unity_session_id: str, now: datetime, redelivery_seconds: float, limit: int
     ) -> list[integration_models.BackendCommand]:
+        """Mark eligible commands delivered before returning them, ordered by numeric command order.
+
+        Args:
+            unity_session_id: Session whose commands are eligible.
+            now: Backend time recorded for this delivery attempt.
+            redelivery_seconds: Minimum age of an unacknowledged delivery before it is eligible again.
+            limit: Maximum number of eligible rows to lock and return.
+
+        Returns:
+            At-least-once work. Later pending commands can be returned while an earlier delivery awaits acknowledgement;
+            Unity must deduplicate command IDs.
+        """
         commands = schema.commands
         with self._engine.begin() as connection:
             rows = (
@@ -281,6 +338,17 @@ class PostgresRepository:
     def acknowledge(
         self, command_id: str, ack: integration_models.CommandAckRequest, now: datetime
     ) -> tuple[integration_models.BackendCommand, bool]:
+        """Store the first terminal Unity outcome under a row lock.
+
+        Args:
+            command_id: Command whose outcome Unity reports.
+            ack: Unity's success/failure result.
+            now: Backend receipt time for this acknowledgement.
+
+        Returns:
+            The stored command and whether it was already terminal. The service layer checks command existence and
+            session ownership before calling this repository method.
+        """
         commands = schema.commands
         with self._engine.begin() as connection:
             row = (
@@ -308,6 +376,7 @@ class PostgresRepository:
                 .one()
             )
             if ack.success and row["command_type"] == enums.CommandType.RESET_SIMULATION.value:
+                # A confirmed reset supersedes older open work; commands created after it remain untouched.
                 connection.execute(
                     commands.update()
                     .where(

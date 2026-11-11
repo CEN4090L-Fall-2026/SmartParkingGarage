@@ -43,6 +43,7 @@ def get_commands(
     limit: Annotated[int, Query(ge=1, le=100)] = 10,
 ) -> integration_models.CommandBatch:
     """Pending commands for this Unity session, oldest first (also redelivers long-unacknowledged ones)."""
+    # Polling persists delivery count/time; eligible unacknowledged commands are redelivered after the configured delay.
     commands = integration.fetch_commands(unity_session_id, limit)
     return integration_models.CommandBatch(
         backend_instance_id=integration.backend_instance_id,
@@ -67,6 +68,7 @@ def ack_command(
     integration: Annotated[integration_service.IntegrationService, Depends(deps.get_integration)],
 ) -> integration_models.CommandAckResponse:
     """Unity reports a command result. Idempotent: acknowledging a finished command changes nothing."""
+    # Recording an acknowledgement does not mutate the garage projection; Unity's next snapshot reports vehicle state.
     command, duplicate = integration.acknowledge(command_id, ack)
     message = "Command was already finished; acknowledgement ignored." if duplicate else "Acknowledgement recorded."
     return integration_models.CommandAckResponse(success=True, message=message, duplicate=duplicate, command=command)

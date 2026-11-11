@@ -74,6 +74,7 @@ class CommandPayload(BaseModel):
     preferred_level: enums.Level | None = None
     auto_depart: bool | None = None
     vehicle_id: str | None = Field(default=None, description="Target vehicle for a DepartVehicle command.")
+    # Links backend spawn-request intent; vehicle_id separately identifies a departure-command target.
     spawn_request_id: str | None = None
 
 

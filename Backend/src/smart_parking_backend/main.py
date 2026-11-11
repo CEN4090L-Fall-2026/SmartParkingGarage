@@ -1,3 +1,5 @@
+"""Build the FastAPI application and bind process-local services to its lifespan."""
+
 import os
 import time
 from collections.abc import Callable
@@ -25,7 +27,7 @@ from smart_parking_backend.services import garage_state
 from smart_parking_backend.services import integration as integration_service
 from smart_parking_backend.storage.repository import PostgresRepository
 
-# Explicit local development origins for future React clients; deliberately not "*".
+# Browser CORS is restricted to explicit local dashboard origins rather than permitting every origin.
 ALLOWED_ORIGINS = [
     "http://localhost:3000",
     "http://localhost:5173",
@@ -42,6 +44,21 @@ def create_app(
     timeout_seconds: float | None = None,
     redelivery_seconds: float | None = None,
 ) -> FastAPI:
+    """Create the application; database resources and recovery belong to its lifespan.
+
+    Args:
+        database_url: PostgreSQL URL, falling back to the required ``SPG_DATABASE_URL`` environment variable.
+        clock: Monotonic clock for Unity-report freshness and focus-lease expiry.
+        utcnow: Independent UTC clock for receipt timestamps, command redelivery, and restored-age reporting.
+        timeout_seconds: Optional Unity connectivity timeout override.
+        redelivery_seconds: Optional minimum delay before redelivering an unacknowledged command.
+
+    Returns:
+        A FastAPI application configured with lifespan-managed services.
+
+    Entering the lifespan requires an already-migrated database schema and performs recovery before requests are served.
+    Calling this factory alone neither connects to PostgreSQL nor runs recovery.
+    """
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         engine = create_engine(database_url or os.environ["SPG_DATABASE_URL"])

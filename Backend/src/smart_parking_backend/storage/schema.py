@@ -4,6 +4,7 @@ import sqlalchemy as sa
 from sqlalchemy.dialects.postgresql import JSONB
 
 metadata = sa.MetaData()
+# Sequence allocation is durable ID/order, not gap-free numbering; rolled-back inserts can consume values.
 command_order_seq = sa.Sequence("command_order_seq", metadata=metadata)
 parking_request_order_seq = sa.Sequence("parking_request_order_seq", metadata=metadata)
 
@@ -34,6 +35,7 @@ commands = sa.Table(
     sa.Column("command_order", sa.BigInteger, command_order_seq, primary_key=True, autoincrement=False),
     sa.Column("command_id", sa.Text, nullable=False, unique=True),
     sa.Column("unity_session_id", sa.Text, sa.ForeignKey("unity_sessions.unity_session_id"), nullable=False),
+    # This link lets request status/results derive from the command that owns execution outcome.
     sa.Column("spawn_request_id", sa.Text, sa.ForeignKey("parking_requests.request_id"), unique=True),
     sa.Column("command_type", sa.Text, nullable=False),
     sa.Column("payload", JSONB, nullable=False),
@@ -48,6 +50,7 @@ commands = sa.Table(
     sa.Index("ix_commands_session_status_order", "unity_session_id", "status", "command_order"),
 )
 
+# Recovery projection only; singleton_id=1 is an application convention, not a one-row database constraint.
 latest_garage_snapshot = sa.Table(
     "latest_garage_snapshot",
     metadata,

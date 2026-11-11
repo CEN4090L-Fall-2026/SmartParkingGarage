@@ -23,7 +23,18 @@ def _queue(
     message: str,
     payload: integration_models.CommandPayload | None = None,
 ) -> response_models.CommandAccepted:
-    """Queue for Unity. The simulation state changes only when Unity executes it and reports back."""
+    """Queue simulation intent while leaving transition validation and state ownership to Unity.
+
+    Args:
+        service: Current last-known garage projection.
+        integration: Session-aware command service.
+        command_type: Unity operation to request.
+        message: Human-readable operation name used in the acceptance response.
+        payload: Optional command-specific data.
+
+    Returns:
+        A queued command with ``current_state`` copied from the last-known projection; it is not an execution result.
+    """
     state = service.last_known_state()
     command = integration.enqueue(command_type, payload)
     return response_models.CommandAccepted(
@@ -111,6 +122,8 @@ def reset(
     command: command_models.ResetSimulationCommand | None = None,
 ) -> response_models.CommandAccepted:
     """Queue a reset. Commands not yet delivered to Unity are cancelled as obsolete."""
+    # Insert cancels only older Pending work; successful Unity reset acknowledgement later cancels older open work.
+    # Delivered commands remain visible until reset succeeds because Unity may already have executed them.
     return _queue(service, integration, enums.CommandType.RESET_SIMULATION, "Reset")
 
 

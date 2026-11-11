@@ -1,8 +1,7 @@
-"""
-Backend projection of the garage: the seeded baseline until a Unity snapshot replaces it (cs:15).
+"""Process-local garage projection, initially seeded and replaced by full Unity reports.
 
-This service owns NO simulation logic. Unity is authoritative for live state; the backend only stores what Unity
-reports (plus its own spawn-request records) and serves it to clients.
+This service owns no simulation logic. It serves the current space/vehicle projection; durable spawn-request records
+remain repository-owned and are not merged into Unity's reported state.
 """
 
 import threading
@@ -48,6 +47,11 @@ def _idle_report() -> simulation_models.SimulationReport:
 
 
 class GarageStateService:
+    """Own the process-local garage projection, not simulation decisions or durable request records.
+
+    Projection updates and stored-object reads use ``model_copy()`` so caller changes cannot mutate internal state.
+    """
+
     def __init__(self, repository: PostgresRepository) -> None:
         self._repository = repository
         self._lock = threading.RLock()
@@ -62,7 +66,10 @@ class GarageStateService:
         spaces: list[parking_models.ParkingSpace],
         vehicles: list[vehicle_models.Vehicle],
     ) -> None:
-        """Replace the whole projection with what Unity reported. There is deliberately no merge with the seed."""
+        """Replace the complete projection with Unity's report; never merge seeded stalls into live state.
+
+        Model copies isolate the internal projection from objects retained or mutated by callers.
+        """
         with self._lock:
             self._spaces = {s.space_id: s.model_copy() for s in spaces}
             self._vehicles = {v.vehicle_id: v.model_copy() for v in vehicles}
@@ -87,6 +94,10 @@ class GarageStateService:
     def garage_summary(
         self, data_source: enums.DataSource = enums.DataSource.SEEDED_BASELINE
     ) -> parking_models.GarageSummary:
+        """Summarize physical capacity and current availability from the same projected space set.
+
+        ``by_space_type`` counts physical spaces of each type, not currently available spaces.
+        """
         with self._lock:
             spaces = list(self._spaces.values())
             total = parking_models.StateCounts(**self._counts(spaces))
@@ -147,6 +158,11 @@ class GarageStateService:
     def simulation_status(
         self, data_source: enums.DataSource = enums.DataSource.SEEDED_BASELINE
     ) -> simulation_models.SimulationStatus:
+        """Combine Unity counters, projected space counts, and durable open spawn commands.
+
+        Spawn requests remain pending until their command reaches a terminal result; an acknowledged spawn is not the
+        same as completed parking.
+        """
         with self._lock:
             r = self._report
             counts = self._counts(list(self._spaces.values()))

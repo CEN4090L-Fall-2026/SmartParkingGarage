@@ -23,6 +23,7 @@ def list_vehicles(
 ) -> list[vehicle_models.Vehicle]:
     """Active simulation vehicles as last reported by Unity (empty until Unity has reported)."""
     deps.tag_data_source(response, integration)
+    # No lifecycle filter means every vehicle in the latest snapshot, not an active-only backend subset.
     return service.list_vehicles(lifecycle_state)
 
 
@@ -85,6 +86,7 @@ def request_departure(
     integration: Annotated[integration_service.IntegrationService, Depends(deps.get_integration)],
 ) -> response_models.CommandAccepted:
     """Queue a departure request for Unity; Unity validates and performs the departure."""
+    # Forward intent without optimistic stall release or local readiness checks; Unity owns and reports the transition.
     state = service.last_known_state()
     queued = integration.enqueue(
         enums.CommandType.DEPART_VEHICLE, integration_models.CommandPayload(vehicle_id=vehicle_id)

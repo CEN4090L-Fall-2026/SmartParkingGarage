@@ -36,6 +36,7 @@ class CameraDefinition(BaseModel):
     camera_id: str = Field(min_length=1, max_length=128)
     display_name: str
     category: CameraCategory
+    # Level 0 denotes a camera not tied to one specific garage level.
     level: int = Field(ge=0, le=4)
     enabled: bool
     allow_focused: bool
@@ -61,6 +62,7 @@ class FrameUpload(BaseModel):
     captured_at: AwareDatetime
     width: int = Field(gt=0)
     height: int = Field(gt=0)
+    # Capture generation identifies focused upload work; FocusRequest.lease_id separately proves viewer ownership.
     focus_generation: str | None = None
 
 
@@ -81,6 +83,7 @@ class CameraView(CameraDefinition):
 class FocusRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
+    # Owner token required to renew/switch an active lease; omit it when acquiring focus initially.
     lease_id: str | None = None
 
 

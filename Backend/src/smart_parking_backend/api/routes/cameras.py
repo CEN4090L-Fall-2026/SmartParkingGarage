@@ -93,6 +93,7 @@ def get_frame(
     service: Annotated[cctv.CCTVService, Depends(deps.get_cctv)],
     kind: Annotated[camera_models.FrameKind, Query()] = camera_models.FrameKind.THUMBNAIL,
 ) -> Response:
+    # A 304 still carries age and health metadata because those change while the cached frame identity does not.
     frame, feed = service.get_frame(camera_id, kind)
     headers = _frame_headers(frame, feed)
     headers["Cache-Control"] = "private, no-cache"
@@ -107,6 +108,11 @@ async def _focused_frames(
     session_id: str,
     focus_generation: str | None,
 ) -> AsyncIterator[bytes]:
+    """Sample the latest focused frame, sending only new ETags until feed/session/generation becomes invalid.
+
+    This is not a frame backlog: captures between polls are coalesced to the latest frame, and an idle stream is not a
+    freshness heartbeat.
+    """
     last_etag = None
     while True:
         try:
@@ -115,6 +121,8 @@ async def _focused_frames(
             break
         if frame.session_id != session_id or frame.focus_generation != focus_generation:
             break
+
+        # Stream only a changed frame identity, not every repeated poll of the same cached JPEG.
         if frame.etag != last_etag:
             headers = {
                 "Content-Type": "image/jpeg",
@@ -126,6 +134,7 @@ async def _focused_frames(
             yield frame.data
             yield b"\r\n"
             last_etag = frame.etag
+        # Keep polling for a newer latest frame; waiting here does not renew capture or certify it as fresh.
         await asyncio.sleep(_STREAM_POLL_SECONDS)
     yield f"--{_STREAM_BOUNDARY}--\r\n".encode("ascii")
 
@@ -143,6 +152,7 @@ def stream_focused(
     camera_id: str,
     service: Annotated[cctv.CCTVService, Depends(deps.get_cctv)],
 ) -> StreamingResponse:
+    # Opening a stream does not acquire/renew focus, and disconnecting has no lease-release side effect.
     frame, _ = service.get_frame(camera_id, camera_models.FrameKind.FOCUSED)
     return StreamingResponse(
         _focused_frames(service, camera_id, frame.session_id, frame.focus_generation),
